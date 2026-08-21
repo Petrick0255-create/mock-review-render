@@ -4,8 +4,14 @@ ENV PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    libreoffice-writer libreoffice-h2orestart fonts-nanum fonts-noto-cjk \
+    libreoffice-writer libreoffice-java-common liblibreoffice-java \
+    default-jre-headless chromium fonts-nanum fonts-noto-cjk fonts-unfonts-core \
     && rm -rf /var/lib/apt/lists/*
+
+COPY H2Orestart-0.7.13.oxt /tmp/H2Orestart.oxt
+RUN unopkg add --shared --force /tmp/H2Orestart.oxt \
+    && unopkg list --shared | grep -q "H2Orestart" \
+    && rm /tmp/H2Orestart.oxt
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

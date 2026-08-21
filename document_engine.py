@@ -5,6 +5,7 @@ import re
 import shutil
 import struct
 import subprocess
+import tempfile
 import unicodedata
 import uuid
 import zipfile
@@ -307,35 +308,148 @@ def text_preview(text: str, destination: Path) -> None:
     image.save(destination, "WEBP", quality=88)
 
 
-def convert_to_pdf(source: Path, output_dir: Path) -> Path | None:
+def repair_hwp_html_headings(html_path: Path) -> int:
+    """Restore heading digits that pyhwp occasionally drops from HWP fields."""
+    from lxml import etree
+
+    parser = etree.XMLParser(recover=True)
+    tree = etree.parse(str(html_path), parser)
+    expected = 1
+    repaired = 0
+    for element in tree.xpath('//*[local-name()="p"]'):
+        text = normalize("".join(element.itertext()))
+        number = question_number(text, strict=False)
+        if number == expected:
+            expected += 1
+            continue
+        # In some Hancom 2020 files a field control consumes only the heading
+        # digits, leaving "답 ③-..." visible. Its position in the 01..25
+        # sequence is still unambiguous, so put the lost digits back before
+        # Chromium captures the page.
+        child_classes = " ".join(str(child.get("class", "")) for child in element.iter())
+        if expected <= 25 and re.match(r"^답(?:\s|$)", text) and "charshape-7" in child_classes:
+            element.text = f"{expected:02d}번 " + (element.text or "")
+            expected += 1
+            repaired += 1
+    tree.write(str(html_path), encoding="utf-8", xml_declaration=True, doctype="<!DOCTYPE html>")
+    return repaired
+
+
+def convert_to_pdf(source: Path, output_dir: Path) -> tuple[Path | None, str]:
     soffice = shutil.which("soffice") or shutil.which("libreoffice")
     if not soffice:
-        return None
-    profile = Path("/tmp") / f"lo-{uuid.uuid4().hex}"
-    completed = subprocess.run(
-        [
-            soffice,
-            f"-env:UserInstallation=file://{profile}",
-            "--headless",
-            "--infilter=Hwp2002_File",
-            "--convert-to",
-            "pdf:writer_pdf_Export",
-            "--outdir",
-            str(output_dir),
-            str(source),
-        ],
-        capture_output=True, text=True, timeout=150,
-    )
-    shutil.rmtree(profile, ignore_errors=True)
+        return None, "LibreOffice 실행 파일이 설치되어 있지 않습니다."
     target = output_dir / f"{source.stem}.pdf"
-    return target if completed.returncode == 0 and target.exists() else None
+    intermediate = output_dir / f"{source.stem}.odt"
+    diagnostics: list[str] = []
+
+    def run(arguments: list[str], label: str) -> subprocess.CompletedProcess:
+        profile = Path("/tmp") / f"lo-{uuid.uuid4().hex}"
+        try:
+            completed = subprocess.run(
+                [
+                    soffice,
+                    f"-env:UserInstallation=file://{profile}",
+                    "--headless",
+                    "--norestore",
+                    "--nofirststartwizard",
+                    *arguments,
+                ],
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            message = normalize(" ".join(filter(None, (completed.stdout, completed.stderr))))
+            diagnostics.append(f"{label}: 종료코드 {completed.returncode}" + (f", {message[:500]}" if message else ""))
+            return completed
+        finally:
+            shutil.rmtree(profile, ignore_errors=True)
+
+    target.unlink(missing_ok=True)
+    run([
+        "--infilter=Hwp2002_File", "--convert-to", "pdf:writer_pdf_Export",
+        "--outdir", str(output_dir), str(source),
+    ], "HWP→PDF 직접 변환")
+    if target.exists() and target.stat().st_size > 0:
+        return target, ""
+
+    # Some HWP 2020 documents only complete import after an ODT save. Retry
+    # through ODT before declaring the renderer unusable.
+    intermediate.unlink(missing_ok=True)
+    run([
+        "--infilter=Hwp2002_File", "--convert-to", "odt:writer8",
+        "--outdir", str(output_dir), str(source),
+    ], "HWP→ODT 중간 변환")
+    if intermediate.exists() and intermediate.stat().st_size > 0:
+        run([
+            "--convert-to", "pdf:writer_pdf_Export", "--outdir", str(output_dir),
+            str(intermediate),
+        ], "ODT→PDF 변환")
+    intermediate.unlink(missing_ok=True)
+    if target.exists() and target.stat().st_size > 0:
+        return target, ""
+
+    # Final layout fallback for HWP 5 / Hancom 2020: pyhwp expands the
+    # document into HTML with its tables and embedded BinData images, then a
+    # headless browser prints that rendered page to PDF. This is materially
+    # different from drawing extracted plain text onto a blank bitmap.
+    hwp5html = shutil.which("hwp5html")
+    chromium = shutil.which("chromium") or shutil.which("chromium-browser")
+    if source.suffix.lower() == ".hwp" and hwp5html and chromium:
+        html_dir = Path(tempfile.mkdtemp(prefix="hwp-html-", dir=output_dir))
+        try:
+            html_result = subprocess.run(
+                [hwp5html, "--output", str(html_dir), str(source)],
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            html_message = normalize(" ".join(filter(None, (html_result.stdout, html_result.stderr))))
+            diagnostics.append(
+                f"HWP→HTML 개체 추출: 종료코드 {html_result.returncode}"
+                + (f", {html_message[:500]}" if html_message else "")
+            )
+            html_path = html_dir / "index.xhtml"
+            if html_result.returncode == 0 and html_path.exists():
+                repaired = repair_hwp_html_headings(html_path)
+                diagnostics.append(f"HTML 문항 번호 복구: {repaired}개")
+                target.unlink(missing_ok=True)
+                chrome_result = subprocess.run(
+                    [
+                        chromium,
+                        "--headless",
+                        "--no-sandbox",
+                        "--disable-dev-shm-usage",
+                        "--disable-gpu",
+                        "--no-pdf-header-footer",
+                        f"--print-to-pdf={target}",
+                        html_path.as_uri(),
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=180,
+                )
+                chrome_message = normalize(" ".join(filter(None, (chrome_result.stdout, chrome_result.stderr))))
+                diagnostics.append(
+                    f"HTML 화면 캡처→PDF: 종료코드 {chrome_result.returncode}"
+                    + (f", {chrome_message[:500]}" if chrome_message else "")
+                )
+                if target.exists() and target.stat().st_size > 0:
+                    return target, ""
+        finally:
+            shutil.rmtree(html_dir, ignore_errors=True)
+    return None, " | ".join(diagnostics) or "변환기가 결과 파일을 만들지 않았습니다."
 
 
 def process_document(source: Path, role: str, assets: Path, prefix: str) -> tuple[dict[int, dict], list[str]]:
     suffix = source.suffix.lower()
     if suffix not in SUPPORTED:
         raise ValueError("PDF, HWP, HWPX 파일만 지원합니다.")
-    pdf = source if suffix == ".pdf" else convert_to_pdf(source, source.parent)
+    conversion_error = ""
+    if suffix == ".pdf":
+        pdf = source
+    else:
+        pdf, conversion_error = convert_to_pdf(source, source.parent)
     if pdf:
         document = fitz.open(pdf)
         try:
@@ -354,7 +468,10 @@ def process_document(source: Path, role: str, assets: Path, prefix: str) -> tupl
         name = f"{prefix}-{number:02d}.webp"
         text_preview(content, assets / name)
         result[number] = {"text": content, "preview": name, "preview_mode": "reconstructed"}
-    warning = ["HWP 원본 레이아웃 변환에 실패하여 문항 텍스트를 이미지로 재조판했습니다. 이 이미지와 추출 텍스트가 AI 분석에 함께 사용됩니다."]
+    warning = [
+        "HWP 2020 원본 렌더링에 실패했습니다. 최신 H2Orestart로 직접 변환과 ODT 중간 변환을 모두 시도했습니다. "
+        f"서버 진단: {conversion_error}"
+    ]
     if not result:
         warning.append("문항 번호를 찾지 못했습니다. 제목을 '01번' 형식으로 확인하세요.")
     return result, warning
