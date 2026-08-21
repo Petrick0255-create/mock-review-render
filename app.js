@@ -11,6 +11,7 @@ const PDF_OPTIONS = {
 };
 
 let currentMode = "view";
+let appMode = null;
 let currentTool = "pen";
 let currentColor = "#172033";
 let activePane = null;
@@ -24,6 +25,10 @@ function toast(message) {
   element.classList.add("show");
   clearTimeout(toastTimer);
   toastTimer = setTimeout(() => element.classList.remove("show"), 2600);
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
 }
 
 class InkDatabase {
@@ -92,6 +97,10 @@ class PdfPane {
     this.lastScrollLeft = 0;
     this.saveTimer = 0;
     this.inkDpr = 1;
+    this.compareRange = [1, 1];
+    this.compareUnits = [];
+    this.compareObserver = null;
+    this.compareGeneration = 0;
 
     this.viewportElement = $(`#${side}Viewport`);
     this.stage = $(`#${side}Stage`);
@@ -102,13 +111,27 @@ class PdfPane {
     this.nameElement = $(`#${side}Name`);
     this.pageInput = $(`#${side}Page`);
     this.totalElement = $(`#${side}Total`);
+    this.continuousElement = $(`#${side}Continuous`);
 
-    $(`#${side}Prev`).addEventListener("click", () => goQuestion(currentQuestion - 1));
-    $(`#${side}Next`).addEventListener("click", () => goQuestion(currentQuestion + 1));
+    $(`#${side}Prev`).addEventListener("click", () => {
+      if (appMode === "compare") this.scrollComparePage(this.pageNumber - 1);
+      else goQuestion(currentQuestion - 1);
+    });
+    $(`#${side}Next`).addEventListener("click", () => {
+      if (appMode === "compare") this.scrollComparePage(this.pageNumber + 1);
+      else goQuestion(currentQuestion + 1);
+    });
     $(`#${side}Layout`).addEventListener("change", () => {
-      this.rebuildQuestionIndex();
-      this.renderQuestion(currentQuestion).catch((error) => toast(error.message));
-      updateDetectionStatus();
+      if (appMode === "compare") {
+        this.buildCompare(true).catch((error) => toast(error.message));
+      } else {
+        this.rebuildQuestionIndex();
+        this.renderQuestion(currentQuestion).catch((error) => toast(error.message));
+        updateDetectionStatus();
+      }
+    });
+    this.pageInput.addEventListener("change", () => {
+      if (appMode === "compare") this.scrollComparePage(this.pageInput.value);
     });
     this.viewportElement.addEventListener("scroll", () => this.syncScroll());
     this.viewportElement.addEventListener("pointerdown", () => { activePane = this; }, { passive: true });
@@ -122,13 +145,18 @@ class PdfPane {
   }
   get inkKey() { return `${this.fingerprint}:question:${this.currentQuestion}:columns-${this.layoutColumns}`; }
 
-  async load(file) {
+  async openDocument(file) {
     if (!pdfjsLib) throw new Error("이 Safari에서 PDF 분석 모듈을 시작하지 못했습니다.");
     if (!file || (!file.name.toLowerCase().endsWith(".pdf") && file.type !== "application/pdf")) {
       throw new Error("PDF 파일만 열 수 있습니다.");
     }
     if (this.renderTask) this.renderTask.cancel();
+    this.compareObserver?.disconnect();
+    this.compareGeneration += 1;
+    this.compareUnits = [];
+    this.continuousElement.replaceChildren();
     if (this.document?.cleanup) await this.document.cleanup();
+    this.document = null;
     if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
 
     this.objectUrl = URL.createObjectURL(file);
@@ -154,21 +182,185 @@ class PdfPane {
     this.pageInput.max = String(this.pageCount);
     this.empty.classList.add("hidden");
     this.nativeFrame.classList.add("hidden");
+    this.continuousElement.classList.add("hidden");
+  }
+
+  async load(file) {
+    await this.openDocument(file);
     this.stage.classList.remove("hidden");
     await this.scanQuestions();
     await this.renderQuestion(currentQuestion);
+  }
+
+  async loadCompare(file) {
+    await this.openDocument(file);
+    this.stage.classList.add("hidden");
+    this.continuousElement.classList.remove("hidden");
+    this.compareRange = [1, this.pageCount];
+    await this.buildCompare(false);
   }
 
   showNative(file) {
     if (this.nativeUrl) URL.revokeObjectURL(this.nativeUrl);
     this.nativeUrl = URL.createObjectURL(file);
     this.stage.classList.add("hidden");
+    this.continuousElement.classList.add("hidden");
     this.empty.classList.add("hidden");
     this.nativeFrame.src = this.nativeUrl;
     this.nativeFrame.classList.remove("hidden");
     this.nameElement.textContent = file.name;
     this.nameElement.title = file.name;
     this.totalElement.textContent = "—";
+  }
+
+  compareColumns() {
+    const value = $(`#${this.side}Layout`).value;
+    return value === "2" ? 2 : 1;
+  }
+
+  async setCompareRange(start, end) {
+    const first = Math.max(1, Math.min(this.pageCount, Math.round(Number(start) || 1)));
+    const last = Math.max(first, Math.min(this.pageCount, Math.round(Number(end) || this.pageCount)));
+    this.compareRange = [first, last];
+    await this.buildCompare(false);
+  }
+
+  async buildCompare(preservePosition = false) {
+    if (!this.document || appMode !== "compare") return;
+    const generation = ++this.compareGeneration;
+    const oldHeight = this.viewportElement.scrollHeight;
+    const oldCenter = this.viewportElement.scrollTop + this.viewportElement.clientHeight / 2;
+    const positionRatio = oldHeight ? oldCenter / oldHeight : 0;
+    this.compareObserver?.disconnect();
+    this.compareUnits = [];
+    this.continuousElement.replaceChildren();
+    this.continuousElement.classList.remove("hidden");
+    this.stage.classList.add("hidden");
+    this.nativeFrame.classList.add("hidden");
+    this.empty.classList.add("hidden");
+
+    const columns = this.compareColumns();
+    const availableWidth = Math.max(220, this.viewportElement.clientWidth - 24);
+    const fragment = document.createDocumentFragment();
+    for (let pageNumber = this.compareRange[0]; pageNumber <= this.compareRange[1]; pageNumber += 1) {
+      const page = await this.document.getPage(pageNumber);
+      if (generation !== this.compareGeneration) return;
+      const base = page.getViewport({ scale: 1 });
+      const columnWidth = base.width / columns;
+      const scale = (availableWidth / columnWidth) * this.zoom;
+      for (let column = 0; column < columns; column += 1) {
+        const element = document.createElement("div");
+        element.className = "compare-unit";
+        element.dataset.location = columns === 2
+          ? `${pageNumber}쪽 · ${column === 0 ? "왼쪽 단" : "오른쪽 단"}`
+          : `${pageNumber}쪽`;
+        element.style.width = `${Math.ceil(columnWidth * scale)}px`;
+        element.style.height = `${Math.ceil(base.height * scale)}px`;
+        const canvas = document.createElement("canvas");
+        element.append(canvas);
+        const unit = { pageNumber, column, columns, base, scale, element, canvas, generation, rendered: false, rendering: false };
+        this.compareUnits.push(unit);
+        fragment.append(element);
+      }
+      page.cleanup?.();
+    }
+    this.continuousElement.append(fragment);
+    this.compareObserver = new IntersectionObserver((entries) => {
+      for (const entry of entries) {
+        const unit = this.compareUnits.find((item) => item.element === entry.target);
+        if (!unit) continue;
+        if (entry.isIntersecting) this.renderCompareUnit(unit).catch((error) => console.error(error));
+      }
+      this.updateCompareLocation();
+    }, { root: this.viewportElement, rootMargin: "700px 0px", threshold: 0.01 });
+    this.compareUnits.forEach((unit) => this.compareObserver.observe(unit.element));
+
+    requestAnimationFrame(() => {
+      this.viewportElement.scrollTop = preservePosition
+        ? Math.max(0, positionRatio * this.viewportElement.scrollHeight - this.viewportElement.clientHeight / 2)
+        : 0;
+      this.viewportElement.scrollLeft = 0;
+      this.updateCompareLocation();
+      this.rememberScroll();
+    });
+  }
+
+  async renderCompareUnit(unit) {
+    if (unit.rendered || unit.rendering || unit.generation !== this.compareGeneration) return;
+    unit.rendering = true;
+    const page = await this.document.getPage(unit.pageNumber);
+    if (unit.generation !== this.compareGeneration) return;
+    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    const viewport = page.getViewport({ scale: unit.scale * dpr });
+    const temporary = document.createElement("canvas");
+    temporary.width = Math.ceil(viewport.width);
+    temporary.height = Math.ceil(viewport.height);
+    const task = page.render({ canvasContext: temporary.getContext("2d", { alpha: false }), viewport });
+    try { await task.promise; }
+    catch (error) {
+      if (error?.name !== "RenderingCancelledException") throw error;
+      return;
+    }
+    if (unit.generation !== this.compareGeneration) return;
+    const sourceWidth = temporary.width / unit.columns;
+    unit.canvas.width = Math.ceil(sourceWidth);
+    unit.canvas.height = temporary.height;
+    unit.canvas.getContext("2d", { alpha: false }).drawImage(
+      temporary, unit.column * sourceWidth, 0, sourceWidth, temporary.height,
+      0, 0, unit.canvas.width, unit.canvas.height,
+    );
+    const annotations = await page.getAnnotations({ intent: "display" });
+    const cssViewport = page.getViewport({ scale: unit.scale });
+    const cropLeft = unit.column * (cssViewport.width / unit.columns);
+    const cropRight = cropLeft + cssViewport.width / unit.columns;
+    for (const annotation of annotations) {
+      const content = annotation.contentsObj?.str || annotation.contents || "";
+      const author = annotation.titleObj?.str || annotation.title || "작성자 알 수 없음";
+      if (!content && !annotation.rect) continue;
+      const rectangle = annotation.rect ? cssViewport.convertToViewportRectangle(annotation.rect) : [cropLeft + 8, 8, cropLeft + 26, 26];
+      const left = Math.min(rectangle[0], rectangle[2]);
+      const top = Math.min(rectangle[1], rectangle[3]);
+      const right = Math.max(rectangle[0], rectangle[2]);
+      const bottom = Math.max(rectangle[1], rectangle[3]);
+      if (right < cropLeft || left > cropRight) continue;
+      const marker = document.createElement("button");
+      marker.type = "button";
+      marker.className = "annotation-marker";
+      marker.style.left = `${Math.max(2, left - cropLeft)}px`;
+      marker.style.top = `${Math.max(2, top)}px`;
+      marker.style.width = `${Math.max(20, Math.min(cropRight, right) - Math.max(cropLeft, left))}px`;
+      marker.style.height = `${Math.max(20, bottom - top)}px`;
+      marker.setAttribute("aria-label", `메모: ${author}`);
+      marker.innerHTML = `<span class="annotation-tooltip"><b>${escapeHtml(author)}</b><span>${escapeHtml(content || "내용 없는 주석")}</span></span>`;
+      marker.addEventListener("click", () => marker.classList.toggle("open"));
+      unit.element.append(marker);
+    }
+    unit.rendered = true;
+    unit.rendering = false;
+    temporary.width = 1;
+    temporary.height = 1;
+    page.cleanup?.();
+  }
+
+  updateCompareLocation() {
+    if (appMode !== "compare" || !this.compareUnits.length) return;
+    const viewportTop = this.viewportElement.getBoundingClientRect().top;
+    const unit = this.compareUnits.reduce((best, item) => {
+      const distance = Math.abs(item.element.getBoundingClientRect().top - viewportTop - 8);
+      return !best || distance < best.distance ? { item, distance } : best;
+    }, null)?.item;
+    if (!unit) return;
+    this.pageNumber = unit.pageNumber;
+    this.pageInput.value = String(unit.pageNumber);
+  }
+
+  scrollComparePage(value) {
+    if (!this.compareUnits.length) return;
+    const targetPage = Math.max(this.compareRange[0], Math.min(this.compareRange[1], Math.round(Number(value) || 1)));
+    const target = this.compareUnits.find((unit) => unit.pageNumber === targetPage && unit.column === 0);
+    target?.element.scrollIntoView({ block: "start", behavior: "smooth" });
+    this.pageNumber = targetPage;
+    this.pageInput.value = String(targetPage);
   }
 
   detectQuestionNumber(text) {
@@ -320,7 +512,9 @@ class PdfPane {
 
   async setZoom(value) {
     this.zoom = value;
-    if (this.document) await this.renderQuestion(this.currentQuestion, true);
+    if (!this.document) return;
+    if (appMode === "compare") await this.buildCompare(true);
+    else await this.renderQuestion(this.currentQuestion, true);
   }
 
   async renderQuestion(number, preservePosition = false) {
@@ -656,13 +850,14 @@ async function goQuestion(value) {
 }
 
 function setMode(mode) {
+  if (appMode === "compare") mode = "view";
   const changed = currentMode !== mode;
   currentMode = mode;
   document.body.classList.toggle("ink-mode", mode === "ink");
   $("#inkToolbar").classList.toggle("visible", mode === "ink");
   $("#inkToolbar").setAttribute("aria-hidden", String(mode !== "ink"));
   $$(".mode").forEach((button) => button.classList.toggle("active", button.dataset.mode === mode));
-  if (changed) {
+  if (changed && appMode === "exam") {
     const renders = [leftPane, rightPane]
       .filter((pane) => pane.document && pane.nativeFrame.classList.contains("hidden"))
       .map((pane) => pane.renderQuestion(pane.currentQuestion, true));
@@ -712,6 +907,8 @@ $("#fullscreen").addEventListener("click", async () => {
 });
 
 const fileDialog = $("#fileDialog");
+const modeDialog = $("#modeDialog");
+const rangeDialog = $("#rangeDialog");
 const leftFile = $("#leftFile");
 const rightFile = $("#rightFile");
 
@@ -741,6 +938,40 @@ for (const side of ["left", "right"]) {
   });
 }
 
+function configureAppMode(mode) {
+  appMode = mode;
+  document.body.classList.toggle("compare-mode", mode === "compare");
+  document.body.classList.toggle("exam-mode", mode === "exam");
+  setMode("view");
+  const compare = mode === "compare";
+  $("#leftPaneLabel").textContent = compare ? "원본" : "문제";
+  $("#rightPaneLabel").textContent = compare ? "비교본" : "해설";
+  $("#leftDropBadge").textContent = compare ? "원본" : "문제";
+  $("#rightDropBadge").textContent = compare ? "비교본" : "해설";
+  $("#leftDropTitle").textContent = compare ? "원본 PDF 놓기" : "문제 PDF 놓기";
+  $("#rightDropTitle").textContent = compare ? "비교 PDF 놓기" : "해설 PDF 놓기";
+  $("#fileDialogEyebrow").textContent = compare ? "원본 대조" : "모의고사 풀이";
+  $("#fileDialogTitle").textContent = compare ? "두 PDF를 나란히 비교합니다" : "문제와 해설을 나란히 엽니다";
+  $("#loadPdfs").textContent = compare ? "두 PDF 대조 시작" : "01~25번 문항 인식해서 열기";
+  $("#compatPdfs").textContent = compare ? "PDF가 안 열릴 때 Safari 호환 보기" : "PDF가 안 열릴 때 Safari 호환 보기";
+  $("#leftLayout").value = compare ? "1" : "auto";
+  $("#rightLayout").value = compare ? "1" : "auto";
+  $("#leftPage").readOnly = !compare;
+  $("#rightPage").readOnly = !compare;
+  $("#detectStatus").textContent = compare ? "연속 원본 대조" : "01~25 탐색";
+  modeDialog.close();
+  if (!fileDialog.open) fileDialog.showModal();
+}
+
+$$('.mode-card').forEach((button) => button.addEventListener("click", () => configureAppMode(button.dataset.appMode)));
+$("#changeMode").addEventListener("click", () => {
+  if (fileDialog.open) fileDialog.close();
+  if (!modeDialog.open) modeDialog.showModal();
+});
+$("#editRanges").addEventListener("click", () => {
+  if (!leftPane.document || !rightPane.document) return toast("먼저 두 PDF를 열어 주세요.");
+  showRangeDialog(true);
+});
 $("#openFiles").addEventListener("click", () => fileDialog.showModal());
 $("#compatPdfs").addEventListener("click", () => {
   const problem = leftFile.files[0];
@@ -749,7 +980,9 @@ $("#compatPdfs").addEventListener("click", () => {
   leftPane.showNative(problem);
   rightPane.showNative(solution);
   fileDialog.close();
-  $("#detectStatus").textContent = "Safari 호환 보기 · 문항 인식과 필기는 사용하지 않음";
+  $("#detectStatus").textContent = appMode === "compare"
+    ? "Safari 호환 보기 · 동시 스크롤은 사용하지 않음"
+    : "Safari 호환 보기 · 문항 인식과 필기는 사용하지 않음";
   toast("Safari 내장 PDF 표시기로 열었습니다.");
 });
 $("#loadPdfs").addEventListener("click", async () => {
@@ -758,12 +991,22 @@ $("#loadPdfs").addEventListener("click", async () => {
   if (!validPdf(problem) || !validPdf(solution)) return;
   $("#busy").classList.remove("hidden");
   try {
-    await leftPane.load(problem);
-    await rightPane.load(solution);
-    updateDetectionStatus();
-    await goQuestion(1);
+    if (appMode === "compare") {
+      await Promise.all([leftPane.loadCompare(problem), rightPane.loadCompare(solution)]);
+      $("#detectStatus").textContent = `원본 ${leftPane.pageCount}쪽 · 비교본 ${rightPane.pageCount}쪽`;
+    } else {
+      await leftPane.load(problem);
+      await rightPane.load(solution);
+      updateDetectionStatus();
+      await goQuestion(1);
+    }
     fileDialog.close();
-    toast("01~25번 위치를 찾았습니다. 좌상단 버튼으로 문항을 이동할 수 있습니다.");
+    if (appMode === "compare") {
+      if (leftPane.pageCount !== rightPane.pageCount) showRangeDialog();
+      else toast("두 PDF를 열었습니다. 스크롤을 끄고 위치를 맞춘 뒤 다시 켤 수 있습니다.");
+    } else {
+      toast("01~25번 위치를 찾았습니다. 좌상단 버튼으로 문항을 이동할 수 있습니다.");
+    }
   } catch (error) {
     console.error(error);
     leftPane.showNative(problem);
@@ -778,13 +1021,51 @@ $("#loadPdfs").addEventListener("click", async () => {
 
 document.addEventListener("keydown", (event) => {
   if (["INPUT", "TEXTAREA"].includes(document.activeElement?.tagName)) return;
-  if (event.key === "ArrowLeft") goQuestion(currentQuestion - 1);
-  if (event.key === "ArrowRight") goQuestion(currentQuestion + 1);
+  if (appMode === "exam" && event.key === "ArrowLeft") goQuestion(currentQuestion - 1);
+  if (appMode === "exam" && event.key === "ArrowRight") goQuestion(currentQuestion + 1);
 });
 
+let resizeTimer = 0;
 window.addEventListener("resize", () => {
   leftPane.rememberScroll();
   rightPane.rememberScroll();
+  clearTimeout(resizeTimer);
+  resizeTimer = setTimeout(() => {
+    const panes = [leftPane, rightPane].filter((pane) => pane.document && pane.nativeFrame.classList.contains("hidden"));
+    const renders = appMode === "compare"
+      ? panes.map((pane) => pane.buildCompare(true))
+      : panes.map((pane) => pane.renderQuestion(pane.currentQuestion, true));
+    Promise.all(renders).catch((error) => console.error(error));
+  }, 180);
 });
 
-fileDialog.showModal();
+function showRangeDialog(useCurrent = false) {
+  const common = Math.min(leftPane.pageCount, rightPane.pageCount);
+  for (const [side, pane] of [["left", leftPane], ["right", rightPane]]) {
+    $(`#${side}RangeStart`).value = String(useCurrent ? pane.compareRange[0] : 1);
+    $(`#${side}RangeStart`).max = String(pane.pageCount);
+    $(`#${side}RangeEnd`).value = String(useCurrent ? pane.compareRange[1] : common);
+    $(`#${side}RangeEnd`).max = String(pane.pageCount);
+  }
+  $("#rangeHelp").textContent = `원본 ${leftPane.pageCount}쪽, 비교본 ${rightPane.pageCount}쪽입니다. 같은 수의 페이지를 지정해 주세요.`;
+  if (!rangeDialog.open) rangeDialog.showModal();
+}
+
+$("#applyRanges").addEventListener("click", async () => {
+  const values = ["leftRangeStart", "leftRangeEnd", "rightRangeStart", "rightRangeEnd"].map((id) => Number($(`#${id}`).value));
+  const [leftStart, leftEnd, rightStart, rightEnd] = values;
+  if (values.some((value) => !Number.isInteger(value)) || leftStart < 1 || rightStart < 1 || leftEnd > leftPane.pageCount || rightEnd > rightPane.pageCount || leftEnd < leftStart || rightEnd < rightStart) {
+    return toast("각 문서 안의 올바른 페이지 범위를 입력해 주세요.");
+  }
+  if (leftEnd - leftStart !== rightEnd - rightStart) return toast("두 범위의 페이지 수를 같게 맞춰 주세요.");
+  $("#busy").classList.remove("hidden");
+  try {
+    await Promise.all([leftPane.setCompareRange(leftStart, leftEnd), rightPane.setCompareRange(rightStart, rightEnd)]);
+    rangeDialog.close();
+    toast("선택한 범위로 비교합니다.");
+  } finally {
+    $("#busy").classList.add("hidden");
+  }
+});
+
+modeDialog.showModal();

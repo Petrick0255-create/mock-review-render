@@ -8,7 +8,9 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="PDF 비교">
     <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="stylesheet" href="./style.css?v=17">
+    <link rel="icon" type="image/svg+xml" href="./icons/app-icon.svg">
+    <link rel="apple-touch-icon" sizes="180x180" href="./icons/apple-touch-icon.png">
+    <link rel="stylesheet" href="./style.css?v=18">
     <title>PDF NOTE COMPARE</title>
   </head>
   <body>
@@ -22,7 +24,9 @@
         </nav>
         <div class="brand"><span class="brand-dot"></span><span>PDF NOTE COMPARE</span></div>
         <div class="top-actions">
+          <button id="changeMode" class="control" type="button">작업 선택</button>
           <button id="openFiles" class="control" type="button">PDF 열기</button>
+          <button id="editRanges" class="control compare-only" type="button">페이지 범위</button>
           <label class="check-control"><input id="syncScroll" type="checkbox" checked><span>스크롤 같이</span></label>
           <div class="zoom-control" aria-label="배율 설정">
             <button id="zoomOut" type="button" aria-label="축소">−</button>
@@ -59,7 +63,7 @@
       <main class="viewer-grid">
         <section class="pdf-pane" data-side="left">
           <header class="pane-header">
-            <div><span class="pane-label">문제</span><span id="leftName" class="file-name">PDF를 열어 주세요</span></div>
+            <div><span id="leftPaneLabel" class="pane-label">문제</span><span id="leftName" class="file-name">PDF를 열어 주세요</span></div>
             <div class="pane-tools">
               <label class="layout-control">문서 형식 <select id="leftLayout"><option value="auto">자동</option><option value="1">1단</option><option value="2">2단</option></select></label>
               <div class="page-control">
@@ -70,6 +74,7 @@
             </div>
           </header>
           <div id="leftViewport" class="viewport">
+            <div id="leftContinuous" class="continuous-pages hidden"></div>
             <div id="leftStage" class="page-stage hidden">
               <canvas id="leftPdf" class="pdf-canvas"></canvas>
               <canvas id="leftInk" class="ink-canvas"></canvas>
@@ -83,7 +88,7 @@
 
         <section class="pdf-pane" data-side="right">
           <header class="pane-header">
-            <div><span class="pane-label solution">해설</span><span id="rightName" class="file-name">PDF를 열어 주세요</span></div>
+            <div><span id="rightPaneLabel" class="pane-label solution">해설</span><span id="rightName" class="file-name">PDF를 열어 주세요</span></div>
             <div class="pane-tools">
               <label class="layout-control">문서 형식 <select id="rightLayout"><option value="auto">자동</option><option value="1">1단</option><option value="2">2단</option></select></label>
               <div class="page-control">
@@ -94,6 +99,7 @@
             </div>
           </header>
           <div id="rightViewport" class="viewport">
+            <div id="rightContinuous" class="continuous-pages hidden"></div>
             <div id="rightStage" class="page-stage hidden">
               <canvas id="rightPdf" class="pdf-canvas"></canvas>
               <canvas id="rightInk" class="ink-canvas"></canvas>
@@ -105,17 +111,31 @@
       </main>
     </div>
 
+    <dialog id="modeDialog">
+      <div class="mode-dialog-card">
+        <div class="mode-dialog-heading"><span>PDF WORKSPACE</span><h1>어떤 작업을 할까요?</h1><p>작업 중에도 상단의 ‘작업 선택’에서 바꿀 수 있습니다.</p></div>
+        <div class="mode-cards">
+          <button class="mode-card compare-card" data-app-mode="compare" type="button">
+            <span class="mode-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M5 6h9v20H5zM18 6h9v20h-9zM9 11h5m4 10h5M11 16h10m-8-3-3 3 3m6-6 3 3-3 3"/></svg></span><strong>PDF 원본 대조</strong><small>두 PDF를 연속으로 나란히 놓고<br>확대·동시 스크롤하여 비교</small>
+          </button>
+          <button class="mode-card exam-card" data-app-mode="exam" type="button">
+            <span class="mode-icon" aria-hidden="true"><svg viewBox="0 0 32 32"><path d="M7 5h18a2 2 0 0 1 2 2v19H9a4 4 0 0 1-4-4V7a2 2 0 0 1 2-2Zm2 21V9m4 4h9m-9 5h9m-9 5h5"/></svg></span><strong>모의고사 풀이</strong><small>01~25번을 문항별로 잘라<br>문제·해설 비교 및 필기</small>
+          </button>
+        </div>
+      </div>
+    </dialog>
+
     <dialog id="fileDialog">
       <form method="dialog" class="dialog-card" id="fileForm">
-        <div class="dialog-title"><div><span>PDF 준비</span><h1>문제와 해설을 나란히 엽니다</h1></div><button id="closeDialog" class="close" value="cancel" type="submit" aria-label="닫기">×</button></div>
+        <div class="dialog-title"><div><span id="fileDialogEyebrow">PDF 준비</span><h1 id="fileDialogTitle">문제와 해설을 나란히 엽니다</h1></div><button id="closeDialog" class="close" value="cancel" type="submit" aria-label="닫기">×</button></div>
         <div class="drop-grid">
           <label class="dropzone" id="leftDrop">
             <input id="leftFile" type="file" accept="application/pdf,.pdf">
-            <span class="drop-badge">문제</span><b>문제 PDF 놓기</b><small id="leftPicked">탭해서 파일 선택도 가능합니다</small>
+            <span id="leftDropBadge" class="drop-badge">문제</span><b id="leftDropTitle">문제 PDF 놓기</b><small id="leftPicked">탭해서 파일 선택도 가능합니다</small>
           </label>
           <label class="dropzone" id="rightDrop">
             <input id="rightFile" type="file" accept="application/pdf,.pdf">
-            <span class="drop-badge solution">해설</span><b>해설 PDF 놓기</b><small id="rightPicked">탭해서 파일 선택도 가능합니다</small>
+            <span id="rightDropBadge" class="drop-badge solution">해설</span><b id="rightDropTitle">해설 PDF 놓기</b><small id="rightPicked">탭해서 파일 선택도 가능합니다</small>
           </label>
         </div>
         <p class="privacy">파일은 서버에 전송되지 않습니다. 이 기기의 브라우저에서만 열립니다.</p>
@@ -126,9 +146,21 @@
       </form>
     </dialog>
 
+    <dialog id="rangeDialog">
+      <form method="dialog" class="range-card">
+        <div class="dialog-title"><div><span>페이지 수가 다릅니다</span><h1>비교할 페이지 범위를 맞춰 주세요</h1></div></div>
+        <div class="range-grid">
+          <fieldset><legend>원본 PDF</legend><label>시작 <input id="leftRangeStart" type="number" min="1" value="1"></label><label>끝 <input id="leftRangeEnd" type="number" min="1" value="1"></label></fieldset>
+          <fieldset><legend>비교 PDF</legend><label>시작 <input id="rightRangeStart" type="number" min="1" value="1"></label><label>끝 <input id="rightRangeEnd" type="number" min="1" value="1"></label></fieldset>
+        </div>
+        <p id="rangeHelp" class="privacy"></p>
+        <button id="applyRanges" class="primary" type="button">이 범위로 비교</button>
+      </form>
+    </dialog>
+
     <div id="busy" class="busy hidden"><span></span><b>PDF 여는 중…</b></div>
     <div id="toast" class="toast" role="status"></div>
     <script defer src="./vendor/pdf.min.js?v=16"></script>
-    <script defer src="./app.js?v=17"></script>
+    <script defer src="./app.js?v=18"></script>
   </body>
 </html>
