@@ -31,6 +31,21 @@ function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
 }
 
+function readCompleteFile(file, label) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onprogress = (event) => {
+      if (!event.lengthComputable) return;
+      const percent = Math.max(0, Math.min(100, Math.round((event.loaded / event.total) * 100)));
+      $("#busyLabel").textContent = `${label} PDF 전체 읽는 중… ${percent}%`;
+    };
+    reader.onerror = () => reject(new Error(`${label} PDF를 끝까지 읽지 못했습니다.`));
+    reader.onabort = () => reject(new Error(`${label} PDF 읽기가 중단되었습니다.`));
+    reader.onload = () => resolve(new Uint8Array(reader.result));
+    reader.readAsArrayBuffer(file);
+  });
+}
+
 class InkDatabase {
   constructor() {
     this.fallbackPrefix = "pdf-note-compare:";
@@ -74,6 +89,8 @@ class PdfPane {
     this.side = side;
     this.other = null;
     this.document = null;
+    this.loadingTask = null;
+    this.sourceFile = null;
     this.objectUrl = null;
     this.nativeUrl = null;
     this.fingerprint = "";
@@ -101,6 +118,8 @@ class PdfPane {
     this.compareUnits = [];
     this.compareObserver = null;
     this.compareGeneration = 0;
+    this.compareQueue = [];
+    this.activeCompareRenders = 0;
 
     this.viewportElement = $(`#${side}Viewport`);
     this.stage = $(`#${side}Stage`);
@@ -154,26 +173,29 @@ class PdfPane {
     this.compareObserver?.disconnect();
     this.compareGeneration += 1;
     this.compareUnits = [];
+    this.compareQueue = [];
     this.continuousElement.replaceChildren();
-    if (this.document?.cleanup) await this.document.cleanup();
+    if (this.loadingTask?.destroy) await this.loadingTask.destroy();
+    else if (this.document?.destroy) await this.document.destroy();
     this.document = null;
+    this.loadingTask = null;
     if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
 
-    this.objectUrl = URL.createObjectURL(file);
-    let loadingTask = pdfjsLib.getDocument({ url: this.objectUrl, ...PDF_OPTIONS });
+    this.sourceFile = file;
+    const label = this.side === "left" ? (appMode === "compare" ? "원본" : "문제") : (appMode === "compare" ? "비교본" : "해설");
+    const completeData = await readCompleteFile(file, label);
+    $("#busyLabel").textContent = `${label} PDF 구조 확인 중…`;
+    const loadingTask = pdfjsLib.getDocument({
+      data: completeData,
+      ...PDF_OPTIONS,
+      useSystemFonts: true,
+    });
+    this.loadingTask = loadingTask;
     loadingTask.onPassword = (updatePassword) => {
       const password = window.prompt(`${file.name}\nPDF 비밀번호를 입력하세요.`);
       if (password !== null) updatePassword(password);
     };
-    try {
-      this.document = await loadingTask.promise;
-    } catch (firstError) {
-      URL.revokeObjectURL(this.objectUrl);
-      this.objectUrl = null;
-      const buffer = await file.arrayBuffer();
-      loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer), ...PDF_OPTIONS });
-      this.document = await loadingTask.promise;
-    }
+    this.document = await loadingTask.promise;
     this.fingerprint = this.document.fingerprints?.[0] || `${file.name}:${file.size}:${file.lastModified}`;
     this.pageNumber = 1;
     this.nameElement.textContent = file.name;
@@ -233,6 +255,7 @@ class PdfPane {
     const positionRatio = oldHeight ? oldCenter / oldHeight : 0;
     this.compareObserver?.disconnect();
     this.compareUnits = [];
+    this.compareQueue = [];
     this.continuousElement.replaceChildren();
     this.continuousElement.classList.remove("hidden");
     this.stage.classList.add("hidden");
@@ -241,38 +264,42 @@ class PdfPane {
 
     const columns = this.compareColumns();
     const availableWidth = Math.max(220, this.viewportElement.clientWidth - 24);
+    const samplePage = await this.document.getPage(this.compareRange[0]);
+    if (generation !== this.compareGeneration) return;
+    const sampleBase = samplePage.getViewport({ scale: 1 });
+    const sampleColumnWidth = sampleBase.width / columns;
+    const sampleScale = (availableWidth / sampleColumnWidth) * this.zoom;
     const fragment = document.createDocumentFragment();
     for (let pageNumber = this.compareRange[0]; pageNumber <= this.compareRange[1]; pageNumber += 1) {
-      const page = await this.document.getPage(pageNumber);
-      if (generation !== this.compareGeneration) return;
-      const base = page.getViewport({ scale: 1 });
-      const columnWidth = base.width / columns;
-      const scale = (availableWidth / columnWidth) * this.zoom;
       for (let column = 0; column < columns; column += 1) {
         const element = document.createElement("div");
         element.className = "compare-unit";
         element.dataset.location = columns === 2
           ? `${pageNumber}쪽 · ${column === 0 ? "왼쪽 단" : "오른쪽 단"}`
           : `${pageNumber}쪽`;
-        element.style.width = `${Math.ceil(columnWidth * scale)}px`;
-        element.style.height = `${Math.ceil(base.height * scale)}px`;
+        element.style.width = `${Math.ceil(sampleColumnWidth * sampleScale)}px`;
+        element.style.height = `${Math.ceil(sampleBase.height * sampleScale)}px`;
         const canvas = document.createElement("canvas");
         element.append(canvas);
-        const unit = { pageNumber, column, columns, base, scale, element, canvas, generation, rendered: false, rendering: false };
+        const unit = { pageNumber, column, columns, availableWidth, base: sampleBase, scale: sampleScale, element, canvas, generation, rendered: false, rendering: false, queued: false, visible: false };
         this.compareUnits.push(unit);
         fragment.append(element);
       }
-      page.cleanup?.();
     }
+    samplePage.cleanup?.();
     this.continuousElement.append(fragment);
+    if (!preservePosition && this.compareUnits[0]) await this.renderCompareUnit(this.compareUnits[0]);
+    if (generation !== this.compareGeneration) return;
+    const unitByElement = new Map(this.compareUnits.map((unit) => [unit.element, unit]));
     this.compareObserver = new IntersectionObserver((entries) => {
       for (const entry of entries) {
-        const unit = this.compareUnits.find((item) => item.element === entry.target);
+        const unit = unitByElement.get(entry.target);
         if (!unit) continue;
-        if (entry.isIntersecting) this.renderCompareUnit(unit).catch((error) => console.error(error));
+        unit.visible = entry.isIntersecting;
+        if (entry.isIntersecting) this.queueCompareUnit(unit);
       }
       this.updateCompareLocation();
-    }, { root: this.viewportElement, rootMargin: "700px 0px", threshold: 0.01 });
+    }, { root: this.viewportElement, rootMargin: "1600px 0px", threshold: 0.01 });
     this.compareUnits.forEach((unit) => this.compareObserver.observe(unit.element));
 
     requestAnimationFrame(() => {
@@ -285,30 +312,59 @@ class PdfPane {
     });
   }
 
+  queueCompareUnit(unit) {
+    if (unit.rendered || unit.rendering || unit.queued || unit.generation !== this.compareGeneration) return;
+    unit.queued = true;
+    this.compareQueue.push(unit);
+    this.pumpCompareQueue();
+  }
+
+  pumpCompareQueue() {
+    if (this.activeCompareRenders >= 1) return;
+    const unit = this.compareQueue.shift();
+    if (!unit) return;
+    unit.queued = false;
+    if (unit.generation !== this.compareGeneration || unit.rendered || !unit.visible) return this.pumpCompareQueue();
+    this.activeCompareRenders += 1;
+    this.renderCompareUnit(unit).catch((error) => console.error(error)).finally(() => {
+      this.activeCompareRenders -= 1;
+      this.pumpCompareQueue();
+    });
+  }
+
   async renderCompareUnit(unit) {
     if (unit.rendered || unit.rendering || unit.generation !== this.compareGeneration) return;
     unit.rendering = true;
     const page = await this.document.getPage(unit.pageNumber);
-    if (unit.generation !== this.compareGeneration) return;
-    const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
+    if (unit.generation !== this.compareGeneration) { unit.rendering = false; return; }
+    const base = page.getViewport({ scale: 1 });
+    const columnWidth = base.width / unit.columns;
+    unit.base = base;
+    unit.scale = (unit.availableWidth / columnWidth) * this.zoom;
+    unit.element.style.width = `${Math.ceil(columnWidth * unit.scale)}px`;
+    unit.element.style.height = `${Math.ceil(base.height * unit.scale)}px`;
+    const targetPixels = columnWidth * unit.scale * base.height * unit.scale;
+    const safeDpr = targetPixels > 2600000 ? 1 : 1.35;
+    const dpr = Math.min(window.devicePixelRatio || 1, safeDpr);
     const viewport = page.getViewport({ scale: unit.scale * dpr });
-    const temporary = document.createElement("canvas");
-    temporary.width = Math.ceil(viewport.width);
-    temporary.height = Math.ceil(viewport.height);
-    const task = page.render({ canvasContext: temporary.getContext("2d", { alpha: false }), viewport });
+    const pixelWidth = Math.ceil(viewport.width / unit.columns);
+    unit.canvas.width = pixelWidth;
+    unit.canvas.height = Math.ceil(viewport.height);
+    const context = unit.canvas.getContext("2d", { alpha: false });
+    context.fillStyle = "#fff";
+    context.fillRect(0, 0, unit.canvas.width, unit.canvas.height);
+    const task = page.render({
+      canvasContext: context,
+      viewport,
+      transform: [1, 0, 0, 1, -unit.column * pixelWidth, 0],
+    });
     try { await task.promise; }
     catch (error) {
       if (error?.name !== "RenderingCancelledException") throw error;
+      unit.rendering = false;
       return;
     }
-    if (unit.generation !== this.compareGeneration) return;
-    const sourceWidth = temporary.width / unit.columns;
-    unit.canvas.width = Math.ceil(sourceWidth);
-    unit.canvas.height = temporary.height;
-    unit.canvas.getContext("2d", { alpha: false }).drawImage(
-      temporary, unit.column * sourceWidth, 0, sourceWidth, temporary.height,
-      0, 0, unit.canvas.width, unit.canvas.height,
-    );
+    if (unit.generation !== this.compareGeneration) { unit.rendering = false; return; }
     const annotations = await page.getAnnotations({ intent: "display" });
     const cssViewport = page.getViewport({ scale: unit.scale });
     const cropLeft = unit.column * (cssViewport.width / unit.columns);
@@ -337,8 +393,6 @@ class PdfPane {
     }
     unit.rendered = true;
     unit.rendering = false;
-    temporary.width = 1;
-    temporary.height = 1;
     page.cleanup?.();
   }
 
@@ -352,6 +406,15 @@ class PdfPane {
     if (!unit) return;
     this.pageNumber = unit.pageNumber;
     this.pageInput.value = String(unit.pageNumber);
+    const currentIndex = this.compareUnits.indexOf(unit);
+    for (let index = 0; index < this.compareUnits.length; index += 1) {
+      const candidate = this.compareUnits[index];
+      if (Math.abs(index - currentIndex) <= 14 || !candidate.rendered) continue;
+      candidate.element.querySelectorAll(".annotation-marker").forEach((marker) => marker.remove());
+      candidate.canvas.width = 1;
+      candidate.canvas.height = 1;
+      candidate.rendered = false;
+    }
   }
 
   scrollComparePage(value) {
@@ -913,8 +976,12 @@ const leftFile = $("#leftFile");
 const rightFile = $("#rightFile");
 
 function validPdf(file) { return file && (file.type === "application/pdf" || file.name.toLowerCase().endsWith(".pdf")); }
+function formatFileSize(bytes) {
+  if (bytes < 1048576) return `${Math.max(1, Math.round(bytes / 1024))}KB`;
+  return `${(bytes / 1048576).toFixed(bytes >= 104857600 ? 0 : 1)}MB`;
+}
 function updatePicked(side, file) {
-  $(`#${side}Picked`).textContent = file ? file.name : "탭해서 파일 선택도 가능합니다";
+  $(`#${side}Picked`).textContent = file ? `${file.name} · ${formatFileSize(file.size)}` : "탭해서 파일 선택도 가능합니다";
   $(`#${side}Drop`).classList.toggle("has-file", Boolean(file));
   $("#loadPdfs").disabled = !(validPdf(leftFile.files[0]) && validPdf(rightFile.files[0]));
   $("#compatPdfs").disabled = $("#loadPdfs").disabled;
@@ -992,8 +1059,9 @@ $("#loadPdfs").addEventListener("click", async () => {
   $("#busy").classList.remove("hidden");
   try {
     if (appMode === "compare") {
-      await Promise.all([leftPane.loadCompare(problem), rightPane.loadCompare(solution)]);
-      $("#detectStatus").textContent = `원본 ${leftPane.pageCount}쪽 · 비교본 ${rightPane.pageCount}쪽`;
+      await leftPane.loadCompare(problem);
+      await rightPane.loadCompare(solution);
+      $("#detectStatus").textContent = `전체 로딩 완료 · 원본 ${leftPane.pageCount}쪽 · 비교본 ${rightPane.pageCount}쪽`;
     } else {
       await leftPane.load(problem);
       await rightPane.load(solution);
@@ -1009,13 +1077,19 @@ $("#loadPdfs").addEventListener("click", async () => {
     }
   } catch (error) {
     console.error(error);
-    leftPane.showNative(problem);
-    rightPane.showNative(solution);
-    fileDialog.close();
-    $("#detectStatus").textContent = "문항 인식 실패 · Safari 호환 보기로 자동 전환됨";
-    toast("문항 인식 모드가 실패해 Safari 내장 PDF 표시기로 열었습니다.");
+    if (appMode === "compare") {
+      $("#detectStatus").textContent = "PDF 전체 로딩 실패";
+      toast(error?.message || "PDF를 완전히 읽지 못했습니다. 파일을 다시 선택해 주세요.");
+    } else {
+      leftPane.showNative(problem);
+      rightPane.showNative(solution);
+      fileDialog.close();
+      $("#detectStatus").textContent = "문항 인식 실패 · Safari 호환 보기로 자동 전환됨";
+      toast("문항 인식 모드가 실패해 Safari 내장 PDF 표시기로 열었습니다.");
+    }
   } finally {
     $("#busy").classList.add("hidden");
+    $("#busyLabel").textContent = "PDF 여는 중…";
   }
 });
 
