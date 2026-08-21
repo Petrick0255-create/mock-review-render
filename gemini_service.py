@@ -3,8 +3,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import base64
+from io import BytesIO
+from pathlib import Path
 
 import httpx
+from PIL import Image
 
 
 MODEL = "gemini-3.1-flash-lite"
@@ -56,13 +60,50 @@ recommended_points는 0.5점 단위로 제안하세요.
 해설이 없으면 해설 오류를 지어내지 마세요. 출력은 지정된 JSON 형식만 사용하세요."""
 
 
-async def analyze(number: int, problem: str, solution: str, subject: str, api_key: str) -> dict:
+def image_parts(images: list[tuple[str, Path]]) -> list[dict]:
+    """Prepare readable, bounded image slices for Gemini inline input."""
+    parts: list[dict] = []
+    for label, path in images:
+        if not path.is_file():
+            continue
+        with Image.open(path) as source:
+            image = source.convert("RGB")
+            if image.width > 1800:
+                height = round(image.height * 1800 / image.width)
+                image = image.resize((1800, height), Image.Resampling.LANCZOS)
+            slice_height = 3600
+            count = max(1, (image.height + slice_height - 1) // slice_height)
+            for index in range(count):
+                crop = image.crop((0, index * slice_height, image.width, min(image.height, (index + 1) * slice_height)))
+                output = BytesIO()
+                crop.save(output, "JPEG", quality=90, optimize=True)
+                parts.append({"text": f"[{label} 이미지 {index + 1}/{count}]"})
+                parts.append({
+                    "inline_data": {
+                        "mime_type": "image/jpeg",
+                        "data": base64.b64encode(output.getvalue()).decode("ascii"),
+                    }
+                })
+    return parts
+
+
+async def analyze(
+    number: int,
+    problem: str,
+    solution: str,
+    subject: str,
+    api_key: str,
+    images: list[tuple[str, Path]] | None = None,
+) -> dict:
     key = (api_key or os.getenv("GEMINI_API_KEY", "")).strip()
     if not key:
         raise ValueError("Gemini API 키가 없습니다. Render 환경변수 또는 화면의 API 키를 입력하세요.")
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
+    parts = [{"text": prompt(number, problem, solution, subject)}]
+    parts.extend(image_parts(images or []))
+    parts.append({"text": "위 추출 텍스트와 이미지를 모두 근거로 검수하세요. 텍스트 추출이 깨졌거나 수식·표·그림 정보가 빠졌다면 이미지를 우선하고, 서로 다르면 그 차이를 오류 근거로 명시하세요."})
     payload = {
-        "contents": [{"parts": [{"text": prompt(number, problem, solution, subject)}]}],
+        "contents": [{"parts": parts}],
         "generationConfig": {
             "temperature": 0.15,
             "responseMimeType": "application/json",

@@ -112,9 +112,11 @@ async def upload(
                 "solution_text": s.get("text", ""),
                 "problem_preview": f"/api/jobs/{job_id}/assets/{p['preview']}" if p.get("preview") else None,
                 "solution_preview": f"/api/jobs/{job_id}/assets/{s['preview']}" if s.get("preview") else None,
+                "problem_asset": p.get("preview"),
+                "solution_asset": s.get("preview"),
                 "analysis": None,
             })
-        job = {"id": job_id, "created": time.time(), "metadata": {"subject": subject, "year": year, "season": season, "round": round_name}, "items": items, "warnings": warnings + solution_warnings}
+        job = {"id": job_id, "created": time.time(), "metadata": {"subject": subject, "year": year, "season": season, "round": round_name}, "items": items, "warnings": list(dict.fromkeys(warnings + solution_warnings))}
         store(job)
         return job
     except HTTPException:
@@ -139,7 +141,16 @@ async def analyze_job(job_id: str, request: AnalyzeRequest):
     async def one(item):
         async with ANALYSIS_LIMIT:
             try:
-                item["analysis"] = await analyze(item["number"], item["problem_text"], item["solution_text"], job["metadata"].get("subject", ""), request.api_key)
+                assets = WORK_ROOT / job_id / "assets"
+                images = []
+                if item.get("problem_asset"):
+                    images.append(("문제지", assets / item["problem_asset"]))
+                if item.get("solution_asset"):
+                    images.append(("해설", assets / item["solution_asset"]))
+                item["analysis"] = await analyze(
+                    item["number"], item["problem_text"], item["solution_text"],
+                    job["metadata"].get("subject", ""), request.api_key, images,
+                )
                 item.pop("analysis_error", None)
             except Exception as exc:
                 item["analysis_error"] = str(exc)
