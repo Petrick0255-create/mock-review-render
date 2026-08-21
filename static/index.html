@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>MOCK REVIEW · 모의고사 자동 검수</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+  <header class="topbar">
+    <div><strong>MOCK REVIEW</strong><span>QUESTION INSPECTOR</span></div>
+    <button id="settingsBtn" class="icon-btn" title="API 키 설정">⚙</button>
+  </header>
+
+  <main>
+    <section id="uploadView" class="view active">
+      <div class="hero">
+        <p class="eyebrow">HWP · HWPX · PDF</p>
+        <h1>모의고사를 문항별로<br>자르고, 함께 검수합니다.</h1>
+        <p>문제지와 해설을 같은 번호끼리 묶어 난이도·배점·오류를 분석합니다.</p>
+      </div>
+      <form id="uploadForm" class="card form-card">
+        <div class="meta-grid">
+          <label>과목<input name="subject" value="통합과학" placeholder="통합과학"></label>
+          <label>연도<input name="year" placeholder="2026"></label>
+          <label>시즌<input name="season" placeholder="3월"></label>
+          <label>회차<input name="round_name" placeholder="0회"></label>
+        </div>
+        <div class="file-grid">
+          <label class="dropzone"><span class="badge">필수</span><b>문제지</b><small>HWP, HWPX 또는 PDF</small><input id="problemFile" name="problem" type="file" accept=".hwp,.hwpx,.pdf" required><em>파일 선택</em><strong class="filename">선택되지 않음</strong></label>
+          <label class="dropzone"><span class="badge subtle">선택</span><b>해설</b><small>같은 번호끼리 자동 연결</small><input id="solutionFile" name="solution" type="file" accept=".hwp,.hwpx,.pdf"><em>파일 선택</em><strong class="filename">선택되지 않음</strong></label>
+        </div>
+        <button class="primary" type="submit">문항 나누기</button>
+        <p class="privacy">업로드 파일은 임시 처리되며 약 2시간 뒤 자동 삭제됩니다.</p>
+      </form>
+    </section>
+
+    <section id="reviewView" class="view">
+      <div class="section-head"><div><p class="eyebrow">QUESTION REVIEW</p><h2>문항 검수</h2></div><button id="analyzeAll" class="primary compact">전체 AI 분석</button></div>
+      <div id="warnings" class="warnings"></div>
+      <div id="questionStrip" class="question-strip"></div>
+      <article id="questionDetail" class="question-detail empty">먼저 문서를 업로드하세요.</article>
+    </section>
+
+    <section id="roadmapView" class="view">
+      <div class="section-head"><div><p class="eyebrow">DIFFICULTY ROADMAP</p><h2>전체 난이도 흐름</h2></div></div>
+      <div id="metricGrid" class="metric-grid"></div>
+      <div class="card chart-card"><div class="card-title"><h3>문항별 난이도 로드맵</h3><span>점을 누르면 문항으로 이동</span></div><div id="roadmap" class="roadmap empty">분석 결과가 쌓이면 표시됩니다.</div><div class="legend"><span>하</span><span>중하</span><span>중</span><span>중상</span><span>상</span><span>최상</span></div></div>
+      <div class="analysis-grid"><div class="card"><h3>난이도 구성</h3><div id="distribution"></div></div><div class="card"><h3>검토 포인트</h3><div id="insights" class="insights"></div></div></div>
+    </section>
+  </main>
+
+  <dialog id="settingsDialog">
+    <form method="dialog" class="settings-card">
+      <h2>Gemini 설정</h2>
+      <p>Render 환경변수에 키가 있으면 비워 두어도 됩니다. 브라우저 저장을 켜면 이 기기에만 보관됩니다.</p>
+      <label>API 키<input id="apiKey" type="password" autocomplete="off" placeholder="AIza..."></label>
+      <label class="check"><input id="rememberKey" type="checkbox"> 이 브라우저에 저장</label>
+      <div class="dialog-actions"><button value="cancel">취소</button><button id="saveSettings" value="default" class="primary">저장</button></div>
+    </form>
+  </dialog>
+
+  <div id="busy" class="busy hidden"><div class="spinner"></div><b id="busyText">처리 중…</b><small>무료 서버는 첫 실행에 시간이 걸릴 수 있습니다.</small></div>
+  <div id="toast" class="toast"></div>
+
+  <nav class="bottom-nav">
+    <button data-view="uploadView" class="active"><span>＋</span>업로드</button>
+    <button data-view="reviewView"><span>▤</span>문항 검수</button>
+    <button data-view="roadmapView"><span>⌁</span>분석</button>
+  </nav>
+  <script src="/app.js"></script>
+</body>
+</html>
