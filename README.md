@@ -15,6 +15,7 @@
 - Apple Pencil과 손가락 필기 지원
 - 필기를 브라우저 IndexedDB에 문서별/페이지별 자동 저장
 - iPad 가로/세로 화면 및 홈 화면 전체화면 모드 대응
+- iPad 메모리 절약을 위한 Blob URL 로딩과 PDF 순차 분석
 
 ## 배포
 

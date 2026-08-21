@@ -69,6 +69,7 @@ class PdfPane {
     this.side = side;
     this.other = null;
     this.document = null;
+    this.objectUrl = null;
     this.fingerprint = "";
     this.pageNumber = 1;
     this.currentQuestion = 1;
@@ -120,14 +121,23 @@ class PdfPane {
     }
     if (this.renderTask) this.renderTask.cancel();
     if (this.document?.cleanup) await this.document.cleanup();
+    if (this.objectUrl) URL.revokeObjectURL(this.objectUrl);
 
-    const buffer = await file.arrayBuffer();
-    const loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer), ...PDF_OPTIONS });
+    this.objectUrl = URL.createObjectURL(file);
+    let loadingTask = pdfjsLib.getDocument({ url: this.objectUrl, ...PDF_OPTIONS });
     loadingTask.onPassword = (updatePassword) => {
       const password = window.prompt(`${file.name}\nPDF 비밀번호를 입력하세요.`);
       if (password !== null) updatePassword(password);
     };
-    this.document = await loadingTask.promise;
+    try {
+      this.document = await loadingTask.promise;
+    } catch (firstError) {
+      URL.revokeObjectURL(this.objectUrl);
+      this.objectUrl = null;
+      const buffer = await file.arrayBuffer();
+      loadingTask = pdfjsLib.getDocument({ data: new Uint8Array(buffer), ...PDF_OPTIONS });
+      this.document = await loadingTask.promise;
+    }
     this.fingerprint = this.document.fingerprints?.[0] || `${file.name}:${file.size}:${file.lastModified}`;
     this.pageNumber = 1;
     this.nameElement.textContent = file.name;
@@ -170,42 +180,60 @@ class PdfPane {
         })
         .sort((a, b) => Math.abs(a.y - b.y) > 3 ? a.y - b.y : a.x - b.x);
 
-      const lines = [];
-      for (const item of positioned) {
-        let line = lines.find((candidate) => Math.abs(candidate.y - item.y) <= 3);
-        if (!line) {
-          line = { y: item.y, items: [] };
-          lines.push(line);
+      const collectLines = (region, regionItems) => {
+        const lines = [];
+        for (const item of regionItems) {
+          let line = lines.find((candidate) => Math.abs(candidate.y - item.y) <= 3);
+          if (!line) {
+            line = { y: item.y, items: [] };
+            lines.push(line);
+          }
+          line.items.push(item);
         }
-        line.items.push(item);
-      }
-      for (const line of lines) {
-        line.items.sort((a, b) => a.x - b.x);
-        const text = line.items.map((item) => item.text).join(" ").replace(/\s+/g, " ").trim();
-        const number = this.detectQuestionNumber(text);
-        const anonymousAnswerHeading = number === null && /^(?:답\s*)?[①-⑤1-5]\s*-/.test(text);
-        if (number !== null || anonymousAnswerHeading) {
-          this.rawCandidates.push({
-            number,
-            page: pageNumber,
-            x: line.items[0].x,
-            y: Math.max(0, line.y - Math.max(...line.items.map((item) => item.height)) - 5),
-            width: viewport.width,
-            height: viewport.height,
-            text,
-          });
+        for (const line of lines) {
+          line.items.sort((a, b) => a.x - b.x);
+          const text = line.items.map((item) => item.text).join(" ").replace(/\s+/g, " ").trim();
+          const number = this.detectQuestionNumber(text);
+          const anonymousAnswerHeading = number === null && /^(?:답\s*)?[①-⑤1-5]\s*-/.test(text);
+          if (number !== null || anonymousAnswerHeading) {
+            this.rawCandidates.push({
+              number,
+              region,
+              page: pageNumber,
+              x: line.items[0].x,
+              y: Math.max(0, line.y - Math.max(...line.items.map((item) => item.height)) - 5),
+              width: viewport.width,
+              height: viewport.height,
+              text,
+            });
+          }
         }
-      }
+      };
+
+      const middle = viewport.width / 2;
+      collectLines("full", positioned);
+      collectLines("left", positioned.filter((item) => item.x < middle));
+      collectLines("right", positioned.filter((item) => item.x >= middle));
+      page.cleanup?.();
     }
-    const leftCount = this.rawCandidates.filter((item) => item.x < item.width * 0.45).length;
-    const rightCount = this.rawCandidates.filter((item) => item.x > item.width * 0.52).length;
+    const leftCount = new Set(this.rawCandidates.filter((item) => item.region === "left" && item.number).map((item) => item.number)).size;
+    const rightCount = new Set(this.rawCandidates.filter((item) => item.region === "right" && item.number).map((item) => item.number)).size;
     this.detectedColumns = leftCount >= 3 && rightCount >= 3 ? 2 : 1;
     this.rebuildQuestionIndex();
   }
 
   rebuildQuestionIndex() {
     const columns = this.layoutColumns;
-    const ordered = [...this.rawCandidates].sort((a, b) => {
+    const preferredRegion = columns === 2 ? ["left", "right"] : ["full"];
+    let candidates = this.rawCandidates.filter((candidate) => preferredRegion.includes(candidate.region));
+    if (candidates.filter((candidate) => candidate.number !== null).length < 8) candidates = [...this.rawCandidates];
+    const unique = new Map();
+    for (const candidate of candidates) {
+      const column = columns === 2 && candidate.x >= candidate.width / 2 ? 1 : 0;
+      const key = `${candidate.page}:${column}:${Math.round(candidate.y / 3)}:${candidate.number ?? "x"}`;
+      if (!unique.has(key) || candidate.region !== "full") unique.set(key, candidate);
+    }
+    const ordered = [...unique.values()].sort((a, b) => {
       if (a.page !== b.page) return a.page - b.page;
       if (columns === 2) {
         const aColumn = a.x >= a.width / 2 ? 1 : 0;
@@ -341,6 +369,9 @@ class PdfPane {
       const sourceHeight = slice.height * scale * dpr;
       context.drawImage(temporary, sourceX, sourceY, sourceWidth, sourceHeight, 0, destinationY, sourceWidth, sourceHeight);
       destinationY += sourceHeight + 10 * scale * dpr;
+      temporary.width = 1;
+      temporary.height = 1;
+      page.cleanup?.();
     }
     if (serial !== this.renderSerial) return;
     this.pageInput.value = String(this.pageNumber);
@@ -617,7 +648,8 @@ $("#loadPdfs").addEventListener("click", async () => {
   if (!validPdf(problem) || !validPdf(solution)) return;
   $("#busy").classList.remove("hidden");
   try {
-    await Promise.all([leftPane.load(problem), rightPane.load(solution)]);
+    await leftPane.load(problem);
+    await rightPane.load(solution);
     updateDetectionStatus();
     await goQuestion(1);
     fileDialog.close();
