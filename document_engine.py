@@ -5,7 +5,6 @@ import re
 import shutil
 import struct
 import subprocess
-import tempfile
 import unicodedata
 import uuid
 import zipfile
@@ -14,7 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import fitz
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageChops, ImageDraw
 
 
 QUESTION_RE = re.compile(r"^\s*(?:(0[1-9])|((?:1\d|2[0-5])))\s*(?:번|[.)])")
@@ -71,8 +70,12 @@ def character_candidates(page: fitz.Page, strict: bool) -> list[tuple[int, fitz.
             for span in line.get("spans", []):
                 for char in span.get("chars", []):
                     value = unicodedata.normalize("NFKC", char.get("c", ""))
-                    if value and not value.isspace():
-                        chars.append((value, fitz.Rect(char["bbox"])))
+                    # NFKC can expand one PDF glyph into multiple characters
+                    # (for example a compatibility symbol).  Keep the text
+                    # index and bounding-box index aligned in that case.
+                    for normalized_character in value:
+                        if not normalized_character.isspace():
+                            chars.append((normalized_character, fitz.Rect(char["bbox"])))
             chars.sort(key=lambda item: item[1].x0)
             match = re.search(pattern, "".join(c for c, _ in chars))
             if not match:
@@ -175,19 +178,43 @@ def detect_questions(document: fitz.Document, role: str) -> tuple[dict[int, list
 def render_question(document: fitz.Document, clips: list[ClipSpec], destination: Path) -> str:
     images, texts = [], []
     matrix = fitz.Matrix(1.65, 1.65)
+
+    def trim_whitespace(image: Image.Image) -> Image.Image:
+        """Remove page/column whitespace without cutting pale diagrams."""
+        rgb = image.convert("RGB")
+        white = Image.new("RGB", rgb.size, "white")
+        difference = ImageChops.difference(rgb, white).convert("L")
+        # Amplifying catches light gray rules and pastel diagram fills while
+        # ignoring JPEG/WebP speckles close to pure white.
+        mask = difference.point(lambda value: 255 if value >= 5 else 0)
+        bbox = mask.getbbox()
+        if not bbox:
+            return rgb
+        padding = 18
+        left = max(0, bbox[0] - padding)
+        top = max(0, bbox[1] - padding)
+        right = min(rgb.width, bbox[2] + padding)
+        bottom = min(rgb.height, bbox[3] + padding)
+        return rgb.crop((left, top, right, bottom))
+
     for spec in clips:
         page = document[spec.page_index]
         pix = page.get_pixmap(matrix=matrix, clip=spec.rect, alpha=False)
-        images.append(Image.frombytes("RGB", (pix.width, pix.height), pix.samples))
+        images.append(trim_whitespace(Image.frombytes("RGB", (pix.width, pix.height), pix.samples)))
         texts.append(page.get_text("text", clip=spec.rect).strip())
     if images:
         width = max(image.width for image in images)
-        height = sum(image.height for image in images)
+        separator = 2
+        height = sum(image.height for image in images) + separator * max(0, len(images) - 1)
         merged = Image.new("RGB", (width, height), "white")
         y = 0
-        for image in images:
-            merged.paste(image, (0, y))
+        for index, image in enumerate(images):
+            # Centering keeps differently trimmed continuation columns aligned.
+            merged.paste(image, ((width - image.width) // 2, y))
             y += image.height
+            if index + 1 < len(images):
+                ImageDraw.Draw(merged).line((0, y, width, y), fill="#e3e8f0", width=separator)
+                y += separator
         merged.save(destination, "WEBP", quality=88, method=4)
     return "\n".join(filter(None, texts))
 
@@ -276,65 +303,6 @@ def split_text_questions(text: str, role: str) -> dict[int, str]:
     return {number: text[position:(ordered[index + 1][1] if index + 1 < len(ordered) else len(text))].strip() for index, (number, position) in enumerate(ordered)}
 
 
-def text_preview(text: str, destination: Path) -> None:
-    font_path = next((p for p in [Path("/usr/share/fonts/truetype/nanum/NanumGothic.ttf"), Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")] if p.exists()), None)
-    font = ImageFont.truetype(str(font_path), 27) if font_path else ImageFont.load_default()
-    small = ImageFont.truetype(str(font_path), 18) if font_path else ImageFont.load_default()
-    width, margin, content_width = 1200, 64, 1072
-    measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
-    lines: list[str] = []
-    for paragraph in text.splitlines() or [text]:
-        paragraph = paragraph.rstrip()
-        if not paragraph:
-            lines.append("")
-            continue
-        current = ""
-        for character in paragraph:
-            candidate = current + character
-            if current and measure.textlength(candidate, font=font) > content_width:
-                lines.append(current.rstrip())
-                current = character.lstrip()
-            else:
-                current = candidate
-        lines.append(current)
-    line_height, header_height = 45, 78
-    height = max(360, header_height + 54 + line_height * len(lines))
-    image = Image.new("RGB", (width, height), "white")
-    draw = ImageDraw.Draw(image)
-    draw.rectangle((0, 0, width, header_height), fill="#17233d")
-    draw.text((margin, 25), "HWP 문항 이미지 · 텍스트 재조판", fill="white", font=small)
-    draw.line((margin, header_height + 25, width - margin, header_height + 25), fill="#dce3ee", width=2)
-    draw.multiline_text((margin, header_height + 46), "\n".join(lines), fill="#17233d", font=font, spacing=line_height - 27)
-    image.save(destination, "WEBP", quality=88)
-
-
-def repair_hwp_html_headings(html_path: Path) -> int:
-    """Restore heading digits that pyhwp occasionally drops from HWP fields."""
-    from lxml import etree
-
-    parser = etree.XMLParser(recover=True)
-    tree = etree.parse(str(html_path), parser)
-    expected = 1
-    repaired = 0
-    for element in tree.xpath('//*[local-name()="p"]'):
-        text = normalize("".join(element.itertext()))
-        number = question_number(text, strict=False)
-        if number == expected:
-            expected += 1
-            continue
-        # In some Hancom 2020 files a field control consumes only the heading
-        # digits, leaving "답 ③-..." visible. Its position in the 01..25
-        # sequence is still unambiguous, so put the lost digits back before
-        # Chromium captures the page.
-        child_classes = " ".join(str(child.get("class", "")) for child in element.iter())
-        if expected <= 25 and re.match(r"^답(?:\s|$)", text) and "charshape-7" in child_classes:
-            element.text = f"{expected:02d}번 " + (element.text or "")
-            expected += 1
-            repaired += 1
-    tree.write(str(html_path), encoding="utf-8", xml_declaration=True, doctype="<!DOCTYPE html>")
-    return repaired
-
-
 def convert_to_pdf(source: Path, output_dir: Path) -> tuple[Path | None, str]:
     soffice = shutil.which("soffice") or shutil.which("libreoffice")
     if not soffice:
@@ -342,6 +310,26 @@ def convert_to_pdf(source: Path, output_dir: Path) -> tuple[Path | None, str]:
     target = output_dir / f"{source.stem}.pdf"
     intermediate = output_dir / f"{source.stem}.odt"
     diagnostics: list[str] = []
+
+    def valid_target(label: str) -> bool:
+        if not target.exists() or target.stat().st_size == 0:
+            return False
+        try:
+            converted = fitz.open(target)
+            page_count = converted.page_count
+            converted.close()
+        except Exception as exc:
+            diagnostics.append(f"{label}: PDF 열기 실패 ({exc})")
+            target.unlink(missing_ok=True)
+            return False
+        # A 25-question paper turning into thousands of pages means that the
+        # converter expanded floating frames/tables as separate pages.  Such a
+        # file must never be accepted as a faithful preview source.
+        if not 1 <= page_count <= 250:
+            diagnostics.append(f"{label}: 비정상 페이지 수 {page_count}쪽")
+            target.unlink(missing_ok=True)
+            return False
+        return True
 
     def run(arguments: list[str], label: str) -> subprocess.CompletedProcess:
         profile = Path("/tmp") / f"lo-{uuid.uuid4().hex}"
@@ -370,7 +358,7 @@ def convert_to_pdf(source: Path, output_dir: Path) -> tuple[Path | None, str]:
         "--infilter=Hwp2002_File", "--convert-to", "pdf:writer_pdf_Export",
         "--outdir", str(output_dir), str(source),
     ], "HWP→PDF 직접 변환")
-    if target.exists() and target.stat().st_size > 0:
+    if valid_target("HWP→PDF 직접 변환 결과"):
         return target, ""
 
     # Some HWP 2020 documents only complete import after an ODT save. Retry
@@ -386,58 +374,9 @@ def convert_to_pdf(source: Path, output_dir: Path) -> tuple[Path | None, str]:
             str(intermediate),
         ], "ODT→PDF 변환")
     intermediate.unlink(missing_ok=True)
-    if target.exists() and target.stat().st_size > 0:
+    if valid_target("ODT→PDF 변환 결과"):
         return target, ""
 
-    # Final layout fallback for HWP 5 / Hancom 2020: pyhwp expands the
-    # document into HTML with its tables and embedded BinData images, then a
-    # headless browser prints that rendered page to PDF. This is materially
-    # different from drawing extracted plain text onto a blank bitmap.
-    hwp5html = shutil.which("hwp5html")
-    chromium = shutil.which("chromium") or shutil.which("chromium-browser")
-    if source.suffix.lower() == ".hwp" and hwp5html and chromium:
-        html_dir = Path(tempfile.mkdtemp(prefix="hwp-html-", dir=output_dir))
-        try:
-            html_result = subprocess.run(
-                [hwp5html, "--output", str(html_dir), str(source)],
-                capture_output=True,
-                text=True,
-                timeout=180,
-            )
-            html_message = normalize(" ".join(filter(None, (html_result.stdout, html_result.stderr))))
-            diagnostics.append(
-                f"HWP→HTML 개체 추출: 종료코드 {html_result.returncode}"
-                + (f", {html_message[:1800]}" if html_message else "")
-            )
-            html_path = html_dir / "index.xhtml"
-            if html_result.returncode == 0 and html_path.exists():
-                repaired = repair_hwp_html_headings(html_path)
-                diagnostics.append(f"HTML 문항 번호 복구: {repaired}개")
-                target.unlink(missing_ok=True)
-                chrome_result = subprocess.run(
-                    [
-                        chromium,
-                        "--headless",
-                        "--no-sandbox",
-                        "--disable-dev-shm-usage",
-                        "--disable-gpu",
-                        "--no-pdf-header-footer",
-                        f"--print-to-pdf={target}",
-                        html_path.as_uri(),
-                    ],
-                    capture_output=True,
-                    text=True,
-                    timeout=180,
-                )
-                chrome_message = normalize(" ".join(filter(None, (chrome_result.stdout, chrome_result.stderr))))
-                diagnostics.append(
-                    f"HTML 화면 캡처→PDF: 종료코드 {chrome_result.returncode}"
-                    + (f", {chrome_message[:1800]}" if chrome_message else "")
-                )
-                if target.exists() and target.stat().st_size > 0:
-                    return target, ""
-        finally:
-            shutil.rmtree(html_dir, ignore_errors=True)
     return None, " | ".join(diagnostics) or "변환기가 결과 파일을 만들지 않았습니다."
 
 
@@ -453,6 +392,11 @@ def process_document(source: Path, role: str, assets: Path, prefix: str) -> tupl
     if pdf:
         document = fitz.open(pdf)
         try:
+            if document.page_count > 250:
+                raise ValueError(
+                    f"PDF가 {document.page_count:,}쪽으로 생성되어 정상 시험지로 보기 어렵습니다. "
+                    "한글 2020에서 직접 PDF로 저장한 파일을 올려 주세요."
+                )
             questions, warnings = detect_questions(document, role)
             result = {}
             for number, clips in questions.items():
@@ -463,14 +407,18 @@ def process_document(source: Path, role: str, assets: Path, prefix: str) -> tupl
             document.close()
     text = extract_hwp_text(source) if suffix == ".hwp" else extract_hwpx_text(source)
     split = split_text_questions(text, role)
-    result = {}
-    for number, content in split.items():
-        name = f"{prefix}-{number:02d}.webp"
-        text_preview(content, assets / name)
-        result[number] = {"text": content, "preview": name, "preview_mode": "reconstructed"}
+    # Never invent a visual layout from extracted text.  It made tables and
+    # figures look like they were in the wrong place.  Text remains available
+    # to Gemini, while the UI clearly reports that no faithful PDF capture was
+    # produced.
+    result = {
+        number: {"text": content, "preview": None, "preview_mode": "text_only"}
+        for number, content in split.items()
+    }
     warning = [
-        "HWP 2020 원본 렌더링에 실패했습니다. 최신 H2Orestart로 직접 변환과 ODT 중간 변환을 모두 시도했습니다. "
-        f"서버 진단: {conversion_error}"
+        "HWP를 원본 레이아웃의 PDF로 변환하지 못해 잘못 배치된 재조판 이미지는 만들지 않았습니다. "
+        "정확한 문항 이미지는 한글 2020에서 PDF로 저장한 파일을 올려 주세요. "
+        f"변환 진단: {conversion_error[:900]}"
     ]
     if not result:
         warning.append("문항 번호를 찾지 못했습니다. 제목을 '01번' 형식으로 확인하세요.")

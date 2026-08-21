@@ -2,6 +2,7 @@ from pathlib import Path
 import tempfile
 
 import fitz
+from PIL import Image
 
 from document_engine import detect_questions, process_document
 
@@ -34,6 +35,11 @@ def main():
         processed, _ = process_document(pdf, "problem", assets, "problem")
         assert list(processed) == [1, 2, 3, 4, 5]
         assert all((assets / item["preview"]).exists() for item in processed.values())
+        # Question 1 occupies only the top of a much taller detected clip.
+        # The renderer must discard that blank tail before the browser scales
+        # the preview, otherwise the actual text becomes unreadably small.
+        first_preview = Image.open(assets / processed[1]["preview"])
+        assert first_preview.height < 180, first_preview.size
         print("smoke test passed: 5 two-column questions")
 
 

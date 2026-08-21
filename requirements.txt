@@ -6,5 +6,3 @@ pillow==11.3.0
 olefile==0.47
 httpx==0.28.1
 pydantic==2.11.7
-pyhwp==0.1b15
-six==1.17.0

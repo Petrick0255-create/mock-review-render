@@ -5,7 +5,7 @@ WORKDIR /app
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libreoffice-writer libreoffice-java-common liblibreoffice-java \
-    default-jre-headless chromium fonts-nanum fonts-noto-cjk fonts-unfonts-core \
+    default-jre-headless fonts-nanum fonts-noto-cjk fonts-unfonts-core \
     && rm -rf /var/lib/apt/lists/*
 
 COPY H2Orestart-0.7.13.oxt /tmp/H2Orestart.oxt
