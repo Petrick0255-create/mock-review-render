@@ -360,7 +360,7 @@ def convert_to_pdf(source: Path, output_dir: Path) -> tuple[Path | None, str]:
                 timeout=180,
             )
             message = normalize(" ".join(filter(None, (completed.stdout, completed.stderr))))
-            diagnostics.append(f"{label}: 종료코드 {completed.returncode}" + (f", {message[:500]}" if message else ""))
+            diagnostics.append(f"{label}: 종료코드 {completed.returncode}" + (f", {message[:1800]}" if message else ""))
             return completed
         finally:
             shutil.rmtree(profile, ignore_errors=True)
@@ -407,7 +407,7 @@ def convert_to_pdf(source: Path, output_dir: Path) -> tuple[Path | None, str]:
             html_message = normalize(" ".join(filter(None, (html_result.stdout, html_result.stderr))))
             diagnostics.append(
                 f"HWP→HTML 개체 추출: 종료코드 {html_result.returncode}"
-                + (f", {html_message[:500]}" if html_message else "")
+                + (f", {html_message[:1800]}" if html_message else "")
             )
             html_path = html_dir / "index.xhtml"
             if html_result.returncode == 0 and html_path.exists():
@@ -432,7 +432,7 @@ def convert_to_pdf(source: Path, output_dir: Path) -> tuple[Path | None, str]:
                 chrome_message = normalize(" ".join(filter(None, (chrome_result.stdout, chrome_result.stderr))))
                 diagnostics.append(
                     f"HTML 화면 캡처→PDF: 종료코드 {chrome_result.returncode}"
-                    + (f", {chrome_message[:500]}" if chrome_message else "")
+                    + (f", {chrome_message[:1800]}" if chrome_message else "")
                 )
                 if target.exists() and target.stat().st_size > 0:
                     return target, ""

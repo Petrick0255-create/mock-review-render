@@ -11,6 +11,7 @@ HWP/HWPX/PDF 문제지와 해설을 문항별로 나누고 Gemini가 난이도, 
 - 문항별 원본 미리보기
 - Gemini가 추출 텍스트와 문제·해설 문항 이미지를 동시에 참고
 - H2Orestart 0.7.13의 HWP 5/HWPX 입력 필터로 실제 PDF를 만든 뒤 문항 이미지를 절단
+- `SurroundContour` 호환성을 위해 LibreOffice 7.4 계열의 Debian Bookworm 기반 사용
 - 한글 2020 문서는 직접 PDF 변환 후 ODT 중간 변환도 자동 재시도
 - 그래도 실패하면 HWP 내부 표·그림·본문을 HTML로 풀어 실제 브라우저 화면을 PDF로 캡처
 - HTML 변환 중 사라진 문항 번호는 01~25 순서에 따라 복구한 뒤 캡처
