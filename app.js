@@ -83,6 +83,11 @@ class PdfPane {
     this.strokes = [];
     this.drawing = null;
     this.pointerId = null;
+    this.drawingPointerType = null;
+    this.touchPointers = new Map();
+    this.touchStartSnapshot = null;
+    this.panGesture = null;
+    this.suppressTouchInk = false;
     this.lastScrollTop = 0;
     this.lastScrollLeft = 0;
     this.saveTimer = 0;
@@ -344,7 +349,9 @@ class PdfPane {
     const maxBaseWidth = Math.max(...slices.map((slice) => slice.width));
     const totalBaseHeight = slices.reduce((sum, slice) => sum + slice.height, 0) + Math.max(0, slices.length - 1) * 10;
     const availableWidth = Math.max(260, this.viewportElement.clientWidth - 28);
-    let scale = (availableWidth / maxBaseWidth) * this.zoom;
+    const toolbarAllowance = currentMode === "ink" ? 62 : 0;
+    const availableHeight = Math.max(220, this.viewportElement.clientHeight - 16 - toolbarAllowance);
+    let scale = Math.min(availableWidth / maxBaseWidth, availableHeight / totalBaseHeight) * this.zoom;
     const dpr = Math.min(window.devicePixelRatio || 1, 1.5);
     scale = Math.min(scale, 28000 / Math.max(1, totalBaseHeight * dpr));
     const width = Math.ceil(maxBaseWidth * scale);
@@ -426,13 +433,50 @@ class PdfPane {
   }
 
   bindInkEvents() {
+    const touchMetrics = () => {
+      const points = [...this.touchPointers.values()].slice(0, 2);
+      if (points.length < 2) return null;
+      return {
+        x: (points[0].x + points[1].x) / 2,
+        y: (points[0].y + points[1].y) / 2,
+        distance: Math.hypot(points[1].x - points[0].x, points[1].y - points[0].y),
+      };
+    };
     this.inkCanvas.addEventListener("contextmenu", (event) => event.preventDefault());
     this.inkCanvas.addEventListener("pointerdown", (event) => {
       if (currentMode !== "ink" || !this.document) return;
       activePane = this;
       event.preventDefault();
-      this.pointerId = event.pointerId;
       this.inkCanvas.setPointerCapture(event.pointerId);
+      if (event.pointerType === "touch") {
+        this.touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+        if (this.touchPointers.size === 1) {
+          this.touchStartSnapshot = JSON.parse(JSON.stringify(this.strokes));
+        } else {
+          this.suppressTouchInk = true;
+          this.strokes = this.touchStartSnapshot || this.strokes;
+          this.drawing = null;
+          this.pointerId = null;
+          this.redrawInk();
+          this.saveInk();
+          const metrics = touchMetrics();
+          const bounds = this.stage.getBoundingClientRect();
+          this.stage.style.transformOrigin = `${Math.max(0, Math.min(100, ((metrics.x - bounds.left) / bounds.width) * 100))}% ${Math.max(0, Math.min(100, ((metrics.y - bounds.top) / bounds.height) * 100))}%`;
+          this.panGesture = {
+            startX: metrics.x,
+            startY: metrics.y,
+            startDistance: Math.max(1, metrics.distance),
+            startScrollLeft: this.viewportElement.scrollLeft,
+            startScrollTop: this.viewportElement.scrollTop,
+            startZoom: this.zoom,
+            factor: 1,
+          };
+          return;
+        }
+        if (this.suppressTouchInk) return;
+      }
+      this.pointerId = event.pointerId;
+      this.drawingPointerType = event.pointerType;
       if (currentTool === "eraser") {
         this.eraseAt(event);
         return;
@@ -448,6 +492,19 @@ class PdfPane {
       this.redrawInk();
     });
     this.inkCanvas.addEventListener("pointermove", (event) => {
+      if (event.pointerType === "touch" && this.touchPointers.has(event.pointerId)) {
+        this.touchPointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
+      }
+      if (this.panGesture && this.touchPointers.size >= 2) {
+        event.preventDefault();
+        const metrics = touchMetrics();
+        const factor = Math.max(0.45, Math.min(3, metrics.distance / this.panGesture.startDistance));
+        this.panGesture.factor = factor;
+        this.stage.style.transform = `scale(${factor})`;
+        this.viewportElement.scrollLeft = this.panGesture.startScrollLeft - (metrics.x - this.panGesture.startX);
+        this.viewportElement.scrollTop = this.panGesture.startScrollTop - (metrics.y - this.panGesture.startY);
+        return;
+      }
       if (event.pointerId !== this.pointerId) return;
       event.preventDefault();
       if (currentTool === "eraser") {
@@ -460,9 +517,28 @@ class PdfPane {
       this.redrawInk();
     });
     const finish = (event) => {
+      if (event.pointerType === "touch") {
+        this.touchPointers.delete(event.pointerId);
+        if (this.suppressTouchInk) {
+          if (this.panGesture) {
+            const targetZoom = this.panGesture.startZoom * this.panGesture.factor;
+            this.panGesture = null;
+            this.stage.style.transform = "";
+            this.stage.style.transformOrigin = "";
+            setZoom(targetZoom * 100);
+          }
+          if (this.touchPointers.size === 0) {
+            this.suppressTouchInk = false;
+            this.touchStartSnapshot = null;
+          }
+          return;
+        }
+        this.touchStartSnapshot = null;
+      }
       if (event.pointerId !== this.pointerId) return;
       this.pointerId = null;
       this.drawing = null;
+      this.drawingPointerType = null;
       this.saveInk();
     };
     this.inkCanvas.addEventListener("pointerup", finish);
@@ -580,11 +656,18 @@ async function goQuestion(value) {
 }
 
 function setMode(mode) {
+  const changed = currentMode !== mode;
   currentMode = mode;
   document.body.classList.toggle("ink-mode", mode === "ink");
   $("#inkToolbar").classList.toggle("visible", mode === "ink");
   $("#inkToolbar").setAttribute("aria-hidden", String(mode !== "ink"));
   $$(".mode").forEach((button) => button.classList.toggle("active", button.dataset.mode === mode));
+  if (changed) {
+    const renders = [leftPane, rightPane]
+      .filter((pane) => pane.document && pane.nativeFrame.classList.contains("hidden"))
+      .map((pane) => pane.renderQuestion(pane.currentQuestion, true));
+    Promise.all(renders).catch((error) => toast(error.message));
+  }
 }
 
 function setZoom(percent) {

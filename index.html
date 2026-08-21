@@ -8,12 +8,18 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="PDF 비교">
     <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="stylesheet" href="./style.css?v=16">
+    <link rel="stylesheet" href="./style.css?v=17">
     <title>PDF NOTE COMPARE</title>
   </head>
   <body>
     <div class="app-shell">
       <header class="topbar">
+        <nav class="question-nav" aria-label="문항 이동">
+          <button id="questionPrev" type="button">‹ 이전</button>
+          <label class="question-number"><input id="questionNumber" type="number" min="1" max="25" value="1"><b>번</b></label>
+          <button id="questionNext" type="button">다음 ›</button>
+          <small id="detectStatus">01~25 탐색</small>
+        </nav>
         <div class="brand"><span class="brand-dot"></span><span>PDF NOTE COMPARE</span></div>
         <div class="top-actions">
           <button id="openFiles" class="control" type="button">PDF 열기</button>
@@ -49,16 +55,6 @@
         <button id="undo" class="control" type="button">실행 취소</button>
         <button id="clearInk" class="control danger" type="button">현재 쪽 지우기</button>
       </div>
-
-      <nav class="question-nav" aria-label="문항 이동">
-        <button id="questionPrev" type="button">‹ 이전 문항</button>
-        <button id="questionNext" type="button">다음 문항 ›</button>
-        <div class="question-current">
-          <span>문항</span>
-          <label><input id="questionNumber" type="number" min="1" max="25" value="1"><b>번</b></label>
-          <small id="detectStatus">PDF를 열면 01~25번을 찾습니다</small>
-        </div>
-      </nav>
 
       <main class="viewer-grid">
         <section class="pdf-pane" data-side="left">
@@ -125,7 +121,7 @@
         <p class="privacy">파일은 서버에 전송되지 않습니다. 이 기기의 브라우저에서만 열립니다.</p>
         <div class="dialog-actions">
           <button id="loadPdfs" class="primary" type="button" disabled>문항 인식 모드로 열기</button>
-          <button id="compatPdfs" class="secondary" type="button" disabled>Safari 호환 모드로 바로 열기</button>
+          <button id="compatPdfs" class="secondary" type="button" disabled>PDF가 안 열릴 때 Safari 호환 보기</button>
         </div>
       </form>
     </dialog>
@@ -133,6 +129,6 @@
     <div id="busy" class="busy hidden"><span></span><b>PDF 여는 중…</b></div>
     <div id="toast" class="toast" role="status"></div>
     <script defer src="./vendor/pdf.min.js?v=16"></script>
-    <script defer src="./app.js?v=16"></script>
+    <script defer src="./app.js?v=17"></script>
   </body>
 </html>
