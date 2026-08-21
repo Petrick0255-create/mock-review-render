@@ -313,7 +313,17 @@ def convert_to_pdf(source: Path, output_dir: Path) -> Path | None:
         return None
     profile = Path("/tmp") / f"lo-{uuid.uuid4().hex}"
     completed = subprocess.run(
-        [soffice, f"-env:UserInstallation=file://{profile}", "--headless", "--convert-to", "pdf", "--outdir", str(output_dir), str(source)],
+        [
+            soffice,
+            f"-env:UserInstallation=file://{profile}",
+            "--headless",
+            "--infilter=Hwp2002_File",
+            "--convert-to",
+            "pdf:writer_pdf_Export",
+            "--outdir",
+            str(output_dir),
+            str(source),
+        ],
         capture_output=True, text=True, timeout=150,
     )
     shutil.rmtree(profile, ignore_errors=True)

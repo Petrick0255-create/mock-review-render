@@ -10,7 +10,8 @@ HWP/HWPX/PDF 문제지와 해설을 문항별로 나누고 Gemini가 난이도, 
 - 같은 번호의 문제·해설 자동 연결
 - 문항별 원본 미리보기
 - Gemini가 추출 텍스트와 문제·해설 문항 이미지를 동시에 참고
-- HWP→PDF 실패 시 문항 텍스트를 이미지로 다시 조판하여 AI에 전달
+- H2Orestart의 HWP 5/HWPX 입력 필터로 실제 PDF를 만든 뒤 문항 이미지를 절단
+- 변환 불가능한 손상·암호화 파일만 문항 텍스트 재조판 방식으로 대체
 - Gemini `gemini-3.1-flash-lite` 구조화 분석
 - 6단계 난이도, 추천 배점, 추정 정답, 오류와 수정안
 - 전체 난이도 로드맵, 분포, 추천 총점, 고난도 연속 구간 경고
@@ -46,7 +47,7 @@ pip install -r requirements.txt
 uvicorn app:app --reload --port 10000
 ```
 
-로컬 PC에 LibreOffice가 없으면 HWP/HWPX는 텍스트 대체 미리보기를 사용합니다.
+로컬 PC에서 HWP/HWPX 원본 레이아웃 변환을 사용하려면 LibreOffice와 H2Orestart 확장이 모두 필요합니다. Docker 이미지에는 둘 다 포함되어 있습니다.
 
 ## 운영상 주의
 
