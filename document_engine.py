@@ -277,14 +277,33 @@ def split_text_questions(text: str, role: str) -> dict[int, str]:
 
 def text_preview(text: str, destination: Path) -> None:
     font_path = next((p for p in [Path("/usr/share/fonts/truetype/nanum/NanumGothic.ttf"), Path("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf")] if p.exists()), None)
-    font = ImageFont.truetype(str(font_path), 22) if font_path else ImageFont.load_default()
-    lines = []
-    for paragraph in text.splitlines():
-        while len(paragraph) > 48:
-            lines.append(paragraph[:48]); paragraph = paragraph[48:]
-        lines.append(paragraph)
-    image = Image.new("RGB", (900, max(300, 48 + 34 * min(len(lines), 80))), "white")
-    ImageDraw.Draw(image).multiline_text((35, 30), "\n".join(lines[:80]), fill="#17233d", font=font, spacing=10)
+    font = ImageFont.truetype(str(font_path), 27) if font_path else ImageFont.load_default()
+    small = ImageFont.truetype(str(font_path), 18) if font_path else ImageFont.load_default()
+    width, margin, content_width = 1200, 64, 1072
+    measure = ImageDraw.Draw(Image.new("RGB", (1, 1)))
+    lines: list[str] = []
+    for paragraph in text.splitlines() or [text]:
+        paragraph = paragraph.rstrip()
+        if not paragraph:
+            lines.append("")
+            continue
+        current = ""
+        for character in paragraph:
+            candidate = current + character
+            if current and measure.textlength(candidate, font=font) > content_width:
+                lines.append(current.rstrip())
+                current = character.lstrip()
+            else:
+                current = candidate
+        lines.append(current)
+    line_height, header_height = 45, 78
+    height = max(360, header_height + 54 + line_height * len(lines))
+    image = Image.new("RGB", (width, height), "white")
+    draw = ImageDraw.Draw(image)
+    draw.rectangle((0, 0, width, header_height), fill="#17233d")
+    draw.text((margin, 25), "HWP 문항 이미지 · 텍스트 재조판", fill="white", font=small)
+    draw.line((margin, header_height + 25, width - margin, header_height + 25), fill="#dce3ee", width=2)
+    draw.multiline_text((margin, header_height + 46), "\n".join(lines), fill="#17233d", font=font, spacing=line_height - 27)
     image.save(destination, "WEBP", quality=88)
 
 
@@ -314,7 +333,7 @@ def process_document(source: Path, role: str, assets: Path, prefix: str) -> tupl
             result = {}
             for number, clips in questions.items():
                 name = f"{prefix}-{number:02d}.webp"
-                result[number] = {"text": render_question(document, clips, assets / name), "preview": name}
+                result[number] = {"text": render_question(document, clips, assets / name), "preview": name, "preview_mode": "original"}
             return result, warnings
         finally:
             document.close()
@@ -324,8 +343,8 @@ def process_document(source: Path, role: str, assets: Path, prefix: str) -> tupl
     for number, content in split.items():
         name = f"{prefix}-{number:02d}.webp"
         text_preview(content, assets / name)
-        result[number] = {"text": content, "preview": name}
-    warning = ["서버 변환기가 문서를 PDF로 바꾸지 못해 텍스트 기반 미리보기를 사용했습니다."]
+        result[number] = {"text": content, "preview": name, "preview_mode": "reconstructed"}
+    warning = ["HWP 원본 레이아웃 변환에 실패하여 문항 텍스트를 이미지로 재조판했습니다. 이 이미지와 추출 텍스트가 AI 분석에 함께 사용됩니다."]
     if not result:
         warning.append("문항 번호를 찾지 못했습니다. 제목을 '01번' 형식으로 확인하세요.")
     return result, warning

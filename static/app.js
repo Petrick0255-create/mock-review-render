@@ -6,6 +6,17 @@ function busy(on,text='처리 중…'){$('#busyText').textContent=text;$('#busy'
 function switchView(id){$$('.view').forEach(v=>v.classList.toggle('active',v.id===id));$$('.bottom-nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===id));if(id==='roadmapView')renderRoadmap()}
 $$('.bottom-nav button').forEach(b=>b.onclick=()=>switchView(b.dataset.view));
 $$('input[type=file]').forEach(input=>input.onchange=()=>input.closest('.dropzone').querySelector('.filename').textContent=input.files[0]?.name||'선택되지 않음');
+$$('.dropzone').forEach(zone=>{
+  const input=zone.querySelector('input[type=file]');
+  ['dragenter','dragover'].forEach(eventName=>zone.addEventListener(eventName,event=>{event.preventDefault();event.stopPropagation();zone.classList.add('dragging')}));
+  ['dragleave','drop'].forEach(eventName=>zone.addEventListener(eventName,event=>{event.preventDefault();event.stopPropagation();zone.classList.remove('dragging')}));
+  zone.addEventListener('drop',event=>{
+    const file=event.dataTransfer.files?.[0];
+    if(!file)return;
+    if(!/\.(hwp|hwpx|pdf)$/i.test(file.name)){toast('HWP, HWPX, PDF 파일만 올릴 수 있습니다.');return}
+    const transfer=new DataTransfer();transfer.items.add(file);input.files=transfer.files;input.dispatchEvent(new Event('change'));
+  });
+});
 $('#settingsBtn').onclick=()=>{$('#apiKey').value=localStorage.getItem('mockReviewGeminiKey')||'';$('#rememberKey').checked=!!$('#apiKey').value;$('#settingsDialog').showModal()};
 $('#saveSettings').onclick=()=>{if($('#rememberKey').checked)localStorage.setItem('mockReviewGeminiKey',$('#apiKey').value);else localStorage.removeItem('mockReviewGeminiKey');toast('설정을 저장했습니다.')};
 $('#uploadForm').onsubmit=async e=>{e.preventDefault();busy(true,'문항을 찾고 미리보기를 만드는 중…');try{const res=await fetch('/api/upload',{method:'POST',body:new FormData(e.target)});const data=await res.json();if(!res.ok)throw new Error(data.detail||'업로드 실패');job=data;currentNumber=job.items[0]?.number;renderReview();switchView('reviewView');toast(`${job.items.length}개 문항을 찾았습니다.`)}catch(err){toast(err.message)}finally{busy(false)}};

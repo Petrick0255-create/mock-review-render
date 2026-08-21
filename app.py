@@ -114,6 +114,8 @@ async def upload(
                 "solution_preview": f"/api/jobs/{job_id}/assets/{s['preview']}" if s.get("preview") else None,
                 "problem_asset": p.get("preview"),
                 "solution_asset": s.get("preview"),
+                "problem_preview_mode": p.get("preview_mode"),
+                "solution_preview_mode": s.get("preview_mode"),
                 "analysis": None,
             })
         job = {"id": job_id, "created": time.time(), "metadata": {"subject": subject, "year": year, "season": season, "round": round_name}, "items": items, "warnings": list(dict.fromkeys(warnings + solution_warnings))}
@@ -144,9 +146,11 @@ async def analyze_job(job_id: str, request: AnalyzeRequest):
                 assets = WORK_ROOT / job_id / "assets"
                 images = []
                 if item.get("problem_asset"):
-                    images.append(("문제지", assets / item["problem_asset"]))
+                    label = "문제지 원본 문항" if item.get("problem_preview_mode") == "original" else "문제지 HWP 텍스트 재조판"
+                    images.append((label, assets / item["problem_asset"]))
                 if item.get("solution_asset"):
-                    images.append(("해설", assets / item["solution_asset"]))
+                    label = "해설 원본 문항" if item.get("solution_preview_mode") == "original" else "해설 HWP 텍스트 재조판"
+                    images.append((label, assets / item["solution_asset"]))
                 item["analysis"] = await analyze(
                     item["number"], item["problem_text"], item["solution_text"],
                     job["metadata"].get("subject", ""), request.api_key, images,
