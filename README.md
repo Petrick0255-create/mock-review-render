@@ -1,79 +1,47 @@
-# MOCK REVIEW
+# PDF NOTE COMPARE
 
-HWP/HWPX/PDF 문제지와 해설을 문항별로 나누고 Gemini가 난이도, 추천 배점, 오류를 검수하는 웹앱입니다. MOCK NOTE의 카드형 관리 UI를 바탕으로 업로드 → 문항 검수 → 난이도 로드맵 흐름을 구성했습니다.
+문제 PDF와 해설 PDF를 아이패드에서 나란히 열어 보고 필기하는 웹앱입니다.
+PDF는 서버에 업로드되지 않고 브라우저에서만 처리됩니다.
 
-## 주요 기능
+## 기능
 
-- 문제지 필수, 해설 선택 업로드(클릭 및 드래그 앤 드롭)
-- HWP/HWPX를 업로드하면 먼저 PDF로 변환하고 미리보기 후 분석 여부 확인
-- 별도 `한글→PDF` 메뉴에서 변환 결과 확인 및 다운로드
-- `01번`부터 `25번`까지 문항 인식
-- 1단/2단 문서 읽기 순서와 여러 페이지에 걸친 문항 처리
-- 같은 번호의 문제·해설 자동 연결
-- 문항별 원본 미리보기
-- Gemini가 추출 텍스트와 문제·해설 문항 이미지를 동시에 참고
-- H2Orestart 0.7.13의 HWP 5/HWPX 입력 필터로 실제 PDF를 만든 뒤 문항 이미지를 절단
-- LibreOffice TextFrame에 없는 `SurroundContour` 호출을 제거한 호환성 패치판 H2Orestart 포함
-- LibreOffice 7.4 계열의 Debian Bookworm 기반으로 변환 환경 고정
-- 한글 2020 문서는 직접 PDF 변환 후 ODT 중간 변환도 자동 재시도
-- H2Orestart가 종료되면 별도 프로세스의 pyhwp로 ODT를 만든 뒤 PDF 변환 재시도
-- PDF가 만들어진 뒤에만 페이지를 이미지로 렌더링하고 문항 영역을 캡처
-- 변환 PDF가 250쪽을 넘으면 표·프레임이 수천 페이지로 풀린 실패 결과로 판정해 캡처하지 않음
-- 여러 단·페이지에 걸친 조각은 각 조각의 빈 여백을 제거한 뒤 자연스럽게 연결
-- 변환 실패 시 표와 그림을 임의로 재배치하지 않고 추출 텍스트만 AI 분석에 사용
-- Gemini `gemini-3.1-flash-lite` 구조화 분석
-- 6단계 난이도, 추천 배점, 추정 정답, 오류와 수정안
-- 전체 난이도 로드맵, 분포, 추천 총점, 고난도 연속 구간 경고
+- 문제/해설 PDF 2분할 보기
+- 페이지, 확대/축소, 스크롤 동기화
+- 펜, 형광펜, 지우개, 실행 취소, 현재 페이지 필기 삭제
+- Apple Pencil과 손가락 필기 지원
+- 필기를 브라우저 IndexedDB에 문서별/페이지별 자동 저장
+- iPad 가로/세로 화면 및 홈 화면 전체화면 모드 대응
 
 ## Render 배포
 
-1. 이 폴더 전체를 GitHub 저장소에 올립니다.
-2. Render에서 **New + → Blueprint**를 선택하고 저장소를 연결합니다.
-3. `render.yaml`이 Docker 웹 서비스를 구성합니다.
-4. 환경변수 `GEMINI_API_KEY`에 Google AI Studio API 키를 입력합니다.
-5. 배포가 끝나면 Render가 제공한 URL을 엽니다.
-
-이전 Docker 이미지에 원본 H2Orestart가 남아 있으면 `SurroundContour` 오류가 계속됩니다. 이 버전을 처음 배포할 때는 Render에서 **Clear build cache & deploy**를 한 번 실행하세요.
-
-화면의 설정 버튼에서 API 키를 직접 입력할 수도 있습니다. “이 브라우저에 저장”을 켠 경우 키는 서버에 저장되지 않고 현재 브라우저의 localStorage에만 남습니다. 공용 PC에서는 저장하지 마세요.
+이 저장소를 Render Blueprint로 배포하고 `Deploy Blueprint`를 누르면 됩니다.
+환경 변수나 API 키는 필요하지 않습니다. 기존 서비스가 있다면 이 커밋을
+푸시하는 것만으로 다시 배포됩니다.
 
 ## 로컬 실행
 
-Docker가 설치된 경우:
-
-```bash
-docker build -t mock-review .
-docker run --rm -p 10000:10000 -e GEMINI_API_KEY=YOUR_KEY mock-review
-```
-
-그 뒤 `http://localhost:10000`을 엽니다. HWP 변환 때문에 Docker 실행을 권장합니다.
-
-Python으로 UI만 확인하려면:
-
 ```bash
 python -m venv .venv
-# Windows: .venv\Scripts\activate
-# macOS/Linux: source .venv/bin/activate
-pip install -r requirements.txt
-uvicorn app:app --reload --port 10000
 ```
 
-로컬 PC에서 HWP/HWPX 원본 레이아웃 변환을 사용하려면 LibreOffice와 H2Orestart 확장이 모두 필요합니다. Docker 이미지에는 둘 다 포함되어 있습니다.
+Windows:
 
-## 운영상 주의
+```bat
+.venv\Scripts\python -m pip install -r requirements.txt
+.venv\Scripts\python -m uvicorn app:app --reload --port 8000
+```
 
-- 업로드 파일은 `/tmp`에 저장되며 2시간 이후 정리됩니다.
-- 무료 Render 인스턴스는 파일을 영구 저장하지 않으므로 분석 자료를 보관해야 한다면 이후 DB/Object Storage를 연결해야 합니다.
-- 파일 하나당 최대 40MB입니다.
-- 서버 메모리와 API 할당량을 보호하기 위해 Gemini 분석은 동시에 최대 2문항씩 실행합니다.
-- 한컴 고유 개체, 수식, 글꼴은 LibreOffice 변환에서 원본과 다르게 보일 수 있습니다. 변환 실패 또는 배치 차이가 있는 중요한 시험지는 한글 2020에서 PDF로 저장한 파일을 올리는 것이 가장 정확합니다.
+macOS/Linux:
 
-## API
+```bash
+.venv/bin/python -m pip install -r requirements.txt
+.venv/bin/python -m uvicorn app:app --reload --port 8000
+```
 
-- `GET /api/health`
-- `POST /api/convert`
-- `GET /api/conversions/{conversion_id}/pdf`
-- `POST /api/upload`
-- `GET /api/jobs/{job_id}`
-- `POST /api/jobs/{job_id}/analyze`
-- `GET /api/jobs/{job_id}/assets/{name}`
+브라우저에서 `http://127.0.0.1:8000`을 엽니다.
+
+## iPad 사용 팁
+
+Safari의 공유 버튼에서 **홈 화면에 추가**를 선택하면 주소 표시줄 없이 화면을
+더 넓게 사용할 수 있습니다. 필기 모드에서는 화면 이동 대신 필기하며, 이동이
+필요할 때는 보기 모드로 전환합니다.

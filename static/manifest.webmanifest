@@ -1,0 +1,9 @@
+{
+  "name": "PDF NOTE COMPARE",
+  "short_name": "PDF 비교",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#f7f8fb",
+  "theme_color": "#f7f8fb",
+  "orientation": "any"
+}

@@ -3,7 +3,6 @@ services:
     name: mock-review
     runtime: docker
     plan: free
+    dockerfilePath: ./Dockerfile
     healthCheckPath: /api/health
-    envVars:
-      - key: GEMINI_API_KEY
-        sync: false
+    autoDeploy: true
