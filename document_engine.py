@@ -415,10 +415,16 @@ def process_document(source: Path, role: str, assets: Path, prefix: str) -> tupl
         number: {"text": content, "preview": None, "preview_mode": "text_only"}
         for number, content in split.items()
     }
+    if "SurroundContour" in conversion_error:
+        diagnostic = "구형 변환 확장 또는 빌드 캐시가 사용되고 있습니다. Docker 이미지를 캐시 없이 다시 빌드해야 합니다."
+    elif "Unspecified Application Error" in conversion_error or "Fatal exception" in conversion_error:
+        diagnostic = "LibreOffice 변환 프로세스가 비정상 종료되었습니다."
+    else:
+        diagnostic = conversion_error.split("Stack:", 1)[0][:320]
     warning = [
         "HWP를 원본 레이아웃의 PDF로 변환하지 못해 잘못 배치된 재조판 이미지는 만들지 않았습니다. "
         "정확한 문항 이미지는 한글 2020에서 PDF로 저장한 파일을 올려 주세요. "
-        f"변환 진단: {conversion_error[:900]}"
+        f"변환 진단: {diagnostic}"
     ]
     if not result:
         warning.append("문항 번호를 찾지 못했습니다. 제목을 '01번' 형식으로 확인하세요.")

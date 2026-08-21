@@ -9,7 +9,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 COPY H2Orestart-0.7.13.oxt /tmp/H2Orestart.oxt
-RUN unopkg add --shared --force /tmp/H2Orestart.oxt \
+RUN python -c "import io,zipfile; o=zipfile.ZipFile('/tmp/H2Orestart.oxt'); j=zipfile.ZipFile(io.BytesIO(o.read('H2Orestart.jar'))); c=j.read('soffice/ConvTable.class'); assert b'SurroundContour' not in c and b'BackTransparent' in c" \
+    && unopkg add --shared --force /tmp/H2Orestart.oxt \
     && unopkg list --shared | grep -q "H2Orestart" \
     && rm /tmp/H2Orestart.oxt
 

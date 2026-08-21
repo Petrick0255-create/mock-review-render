@@ -1,5 +1,6 @@
 from pathlib import Path
 import tempfile
+import zipfile
 
 import fitz
 from PIL import Image
@@ -22,6 +23,18 @@ def build_pdf(path: Path):
 
 
 def main():
+    # The bundled H2Orestart must contain the LibreOffice TextFrame patch.
+    extension = Path(__file__).parents[1] / "H2Orestart-0.7.13.oxt"
+    with zipfile.ZipFile(extension) as outer:
+        jar_bytes = outer.read("H2Orestart.jar")
+    with tempfile.NamedTemporaryFile(suffix=".jar") as jar_file:
+        jar_file.write(jar_bytes)
+        jar_file.flush()
+        with zipfile.ZipFile(jar_file.name) as jar:
+            conv_table = jar.read("soffice/ConvTable.class")
+    assert b"SurroundContour" not in conv_table
+    assert b"BackTransparent" in conv_table
+
     with tempfile.TemporaryDirectory() as temporary:
         root = Path(temporary)
         pdf = root / "sample.pdf"

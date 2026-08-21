@@ -11,7 +11,8 @@ HWP/HWPX/PDF 문제지와 해설을 문항별로 나누고 Gemini가 난이도, 
 - 문항별 원본 미리보기
 - Gemini가 추출 텍스트와 문제·해설 문항 이미지를 동시에 참고
 - H2Orestart 0.7.13의 HWP 5/HWPX 입력 필터로 실제 PDF를 만든 뒤 문항 이미지를 절단
-- `SurroundContour` 호환성을 위해 LibreOffice 7.4 계열의 Debian Bookworm 기반 사용
+- LibreOffice TextFrame에 없는 `SurroundContour` 호출을 제거한 호환성 패치판 H2Orestart 포함
+- LibreOffice 7.4 계열의 Debian Bookworm 기반으로 변환 환경 고정
 - 한글 2020 문서는 직접 PDF 변환 후 ODT 중간 변환도 자동 재시도
 - PDF가 만들어진 뒤에만 페이지를 이미지로 렌더링하고 문항 영역을 캡처
 - 변환 PDF가 250쪽을 넘으면 표·프레임이 수천 페이지로 풀린 실패 결과로 판정해 캡처하지 않음
@@ -28,6 +29,8 @@ HWP/HWPX/PDF 문제지와 해설을 문항별로 나누고 Gemini가 난이도, 
 3. `render.yaml`이 Docker 웹 서비스를 구성합니다.
 4. 환경변수 `GEMINI_API_KEY`에 Google AI Studio API 키를 입력합니다.
 5. 배포가 끝나면 Render가 제공한 URL을 엽니다.
+
+이전 Docker 이미지에 원본 H2Orestart가 남아 있으면 `SurroundContour` 오류가 계속됩니다. 이 버전을 처음 배포할 때는 Render에서 **Clear build cache & deploy**를 한 번 실행하세요.
 
 화면의 설정 버튼에서 API 키를 직접 입력할 수도 있습니다. “이 브라우저에 저장”을 켠 경우 키는 서버에 저장되지 않고 현재 브라우저의 localStorage에만 남습니다. 공용 PC에서는 저장하지 마세요.
 
