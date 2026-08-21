@@ -5,6 +5,8 @@ HWP/HWPX/PDF 문제지와 해설을 문항별로 나누고 Gemini가 난이도, 
 ## 주요 기능
 
 - 문제지 필수, 해설 선택 업로드(클릭 및 드래그 앤 드롭)
+- HWP/HWPX를 업로드하면 먼저 PDF로 변환하고 미리보기 후 분석 여부 확인
+- 별도 `한글→PDF` 메뉴에서 변환 결과 확인 및 다운로드
 - `01번`부터 `25번`까지 문항 인식
 - 1단/2단 문서 읽기 순서와 여러 페이지에 걸친 문항 처리
 - 같은 번호의 문제·해설 자동 연결
@@ -14,6 +16,7 @@ HWP/HWPX/PDF 문제지와 해설을 문항별로 나누고 Gemini가 난이도, 
 - LibreOffice TextFrame에 없는 `SurroundContour` 호출을 제거한 호환성 패치판 H2Orestart 포함
 - LibreOffice 7.4 계열의 Debian Bookworm 기반으로 변환 환경 고정
 - 한글 2020 문서는 직접 PDF 변환 후 ODT 중간 변환도 자동 재시도
+- H2Orestart가 종료되면 별도 프로세스의 pyhwp로 ODT를 만든 뒤 PDF 변환 재시도
 - PDF가 만들어진 뒤에만 페이지를 이미지로 렌더링하고 문항 영역을 캡처
 - 변환 PDF가 250쪽을 넘으면 표·프레임이 수천 페이지로 풀린 실패 결과로 판정해 캡처하지 않음
 - 여러 단·페이지에 걸친 조각은 각 조각의 빈 여백을 제거한 뒤 자연스럽게 연결
@@ -68,6 +71,8 @@ uvicorn app:app --reload --port 10000
 ## API
 
 - `GET /api/health`
+- `POST /api/convert`
+- `GET /api/conversions/{conversion_id}/pdf`
 - `POST /api/upload`
 - `GET /api/jobs/{job_id}`
 - `POST /api/jobs/{job_id}/analyze`

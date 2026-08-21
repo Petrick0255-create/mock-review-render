@@ -35,6 +35,18 @@
       </form>
     </section>
 
+    <section id="converterView" class="view">
+      <div class="section-head"><div><p class="eyebrow">HWP TO PDF</p><h2>한글→PDF 변환</h2></div></div>
+      <div class="card converter-card">
+        <p class="converter-intro">한글 파일을 먼저 PDF로 변환해 결과를 확인한 뒤, 그대로 문항 분석에 사용할 수 있습니다.</p>
+        <form id="converterForm">
+          <label class="dropzone converter-dropzone"><span class="badge">변환</span><b>한글 파일</b><small>HWP 또는 HWPX</small><input id="converterFile" name="document" type="file" accept=".hwp,.hwpx" required><em>클릭하거나 파일을 끌어놓기</em><strong class="filename">선택되지 않음</strong></label>
+          <button class="primary" type="submit">PDF로 변환</button>
+        </form>
+        <div id="converterResult" class="converter-result empty">변환된 PDF가 여기에 표시됩니다.</div>
+      </div>
+    </section>
+
     <section id="reviewView" class="view">
       <div class="section-head"><div><p class="eyebrow">QUESTION REVIEW</p><h2>문항 검수</h2></div><button id="analyzeAll" class="primary compact">전체 AI 분석</button></div>
       <div id="warnings" class="warnings"></div>
@@ -60,11 +72,26 @@
     </form>
   </dialog>
 
+  <dialog id="conversionDialog" class="conversion-dialog">
+    <div class="conversion-modal">
+      <div class="conversion-title"><div><p class="eyebrow">CONVERSION COMPLETE</p><h2>PDF 변환 완료</h2></div><button id="closeConversion" class="icon-btn" type="button">×</button></div>
+      <p id="conversionSummary"></p>
+      <iframe id="convertedPdfPreview" title="변환된 PDF 미리보기"></iframe>
+      <p class="conversion-question">이 PDF로 문항 분석을 진행할까요?</p>
+      <div class="dialog-actions conversion-actions">
+        <a id="downloadConverted" class="secondary-link" download>PDF 다운로드</a>
+        <button id="keepConverted" type="button">아니요, 파일만 넣기</button>
+        <button id="analyzeConverted" type="button" class="primary">분석하기</button>
+      </div>
+    </div>
+  </dialog>
+
   <div id="busy" class="busy hidden"><div class="spinner"></div><b id="busyText">처리 중…</b><small>무료 서버는 첫 실행에 시간이 걸릴 수 있습니다.</small></div>
   <div id="toast" class="toast"></div>
 
   <nav class="bottom-nav">
     <button data-view="uploadView" class="active"><span>＋</span>업로드</button>
+    <button data-view="converterView"><span>⇄</span>한글→PDF</button>
     <button data-view="reviewView"><span>▤</span>문항 검수</button>
     <button data-view="roadmapView"><span>⌁</span>분석</button>
   </nav>

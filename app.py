@@ -10,12 +10,13 @@ import time
 import uuid
 from pathlib import Path
 
+import fitz
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
-from document_engine import SUPPORTED, process_document
+from document_engine import SUPPORTED, convert_to_pdf, process_document
 from gemini_service import analyze
 
 
@@ -75,9 +76,89 @@ def store(job: dict) -> None:
     JOBS[job["id"]] = job
 
 
+def conversion_or_404(conversion_id: str) -> tuple[dict, Path]:
+    if not re.fullmatch(r"[0-9a-f]{32}", conversion_id):
+        raise HTTPException(404, "변환 파일이 존재하지 않습니다.")
+    folder = WORK_ROOT / conversion_id
+    metadata_path = folder / "conversion.json"
+    pdf_path = folder / "converted.pdf"
+    if not metadata_path.exists() or not pdf_path.exists():
+        raise HTTPException(404, "변환 파일이 만료되었거나 존재하지 않습니다.")
+    return json.loads(metadata_path.read_text(encoding="utf-8")), pdf_path
+
+
+def short_conversion_error(message: str) -> str:
+    if "SurroundContour" in message:
+        return "구형 HWP 변환 확장 또는 Docker 캐시가 사용되고 있습니다."
+    if "Unspecified Application Error" in message or "Fatal exception" in message:
+        return "LibreOffice 변환 프로세스가 비정상 종료되었습니다."
+    return message.split("Stack:", 1)[0][:360] or "변환기가 PDF를 만들지 못했습니다."
+
+
 @app.get("/api/health")
 def health():
     return {"ok": True, "service": "mock-review"}
+
+
+@app.post("/api/convert")
+async def convert_hwp(document: UploadFile = File(...)):
+    """Convert first, inspect the PDF, then let the browser decide to analyze."""
+    cleanup()
+    suffix = Path(document.filename or "").suffix.lower()
+    if suffix not in {".hwp", ".hwpx"}:
+        raise HTTPException(400, "HWP 또는 HWPX 파일만 변환할 수 있습니다.")
+    conversion_id = uuid.uuid4().hex
+    folder = WORK_ROOT / conversion_id
+    folder.mkdir(parents=True)
+    try:
+        source = await save_upload(document, folder, "source")
+        pdf, diagnostic = await asyncio.to_thread(convert_to_pdf, source, folder)
+        if not pdf:
+            raise HTTPException(422, f"PDF 변환 실패: {short_conversion_error(diagnostic)}")
+        target = folder / "converted.pdf"
+        if pdf != target:
+            pdf.replace(target)
+        converted = fitz.open(target)
+        try:
+            page_count = converted.page_count
+        finally:
+            converted.close()
+        if not 1 <= page_count <= 250:
+            raise HTTPException(422, f"변환 결과가 {page_count:,}쪽이라 정상 문서로 볼 수 없습니다.")
+        download_name = f"{Path(document.filename or 'document').stem}.pdf"
+        metadata = {
+            "id": conversion_id,
+            "created": time.time(),
+            "source_name": document.filename or source.name,
+            "download_name": download_name,
+            "page_count": page_count,
+        }
+        (folder / "conversion.json").write_text(
+            json.dumps(metadata, ensure_ascii=False, indent=2), encoding="utf-8"
+        )
+        return {
+            **metadata,
+            "pdf_url": f"/api/conversions/{conversion_id}/pdf",
+            "download_url": f"/api/conversions/{conversion_id}/pdf?download=1",
+        }
+    except HTTPException:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise
+    except Exception as exc:
+        shutil.rmtree(folder, ignore_errors=True)
+        raise HTTPException(500, f"PDF 변환 중 오류가 발생했습니다: {exc}") from exc
+
+
+@app.get("/api/conversions/{conversion_id}/pdf")
+def converted_pdf(conversion_id: str, download: int = 0):
+    metadata, pdf_path = conversion_or_404(conversion_id)
+    if download:
+        return FileResponse(
+            pdf_path,
+            media_type="application/pdf",
+            filename=metadata.get("download_name", "converted.pdf"),
+        )
+    return FileResponse(pdf_path, media_type="application/pdf")
 
 
 @app.post("/api/upload")

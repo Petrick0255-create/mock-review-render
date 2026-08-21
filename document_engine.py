@@ -5,6 +5,7 @@ import re
 import shutil
 import struct
 import subprocess
+import sys
 import unicodedata
 import uuid
 import zipfile
@@ -98,10 +99,36 @@ def collect_candidates(document: fitz.Document, strict: bool) -> list[tuple[int,
             found.append((number, page_index, fitz.Rect(rect)))
 
     for page_index, page in enumerate(document):
-        for text, rect in page_lines(page):
+        lines = page_lines(page)
+        for text, rect in lines:
             number = question_number(text, strict)
             if number:
                 add(number, page_index, rect)
+        # pyhwp/ODT exports position the heading number, circled answer and
+        # "답" as separate text boxes on the same baseline. Reassemble only
+        # that narrow heading row, independently for each page column.
+        heading_rows: dict[tuple[int, int], list[tuple[str, fitz.Rect]]] = {}
+        for text, rect in lines:
+            column = int(rect.x0 >= page.rect.width * .5)
+            baseline = round(rect.y0 / 3)
+            heading_rows.setdefault((column, baseline), []).append((text, rect))
+        for row in heading_rows.values():
+            row.sort(key=lambda item: item[1].x0)
+            combined = "".join(text for text, _ in row)
+            match = re.match(r"^\s*(0[1-9]|1\d|2[0-5])\s*(?:[①②③④⑤]\s*){0,3}답", combined)
+            if match:
+                rect = fitz.Rect(row[0][1])
+                for _, item_rect in row[1:]:
+                    rect |= item_rect
+                add(int(match.group(1)), page_index, rect)
+            elif re.match(r"^\s*[①②③④⑤]\s*-\s*\S", combined):
+                # Hancom fields occasionally lose only the heading digits
+                # during ODT export (e.g. "③-과학 기술..."). Keep a marker;
+                # detect_questions assigns the missing number by sequence.
+                rect = fitz.Rect(row[0][1])
+                for _, item_rect in row[1:]:
+                    rect |= item_rect
+                add(0, page_index, rect)
         for number, rect in character_candidates(page, strict):
             add(number, page_index, rect)
         for number in range(1, 26):
@@ -131,6 +158,10 @@ def detect_questions(document: fitz.Document, role: str) -> tuple[dict[int, list
     for number, page_index, rect in candidates:
         if number == expected:
             starts.append((number, page_index, rect))
+            expected += 1
+        elif number == 0 and starts and expected <= 25:
+            starts.append((expected, page_index, rect))
+            warnings.append(f"번호 표기가 빠진 제목을 문서 순서에 따라 {expected:02d}번으로 복구했습니다.")
             expected += 1
         elif starts and number == starts[-1][0]:
             continue
@@ -353,6 +384,39 @@ def convert_to_pdf(source: Path, output_dir: Path) -> tuple[Path | None, str]:
         finally:
             shutil.rmtree(profile, ignore_errors=True)
 
+    # Binary HWP first goes through pyhwp in a separate process. This avoids
+    # loading the unstable HWP table importer inside LibreOffice; LibreOffice
+    # only receives a regular ODT and prints it to PDF.
+    pyhwp_converter = Path(__file__).with_name("hwp_to_odt.py")
+    if source.suffix.lower() == ".hwp" and pyhwp_converter.exists():
+        intermediate.unlink(missing_ok=True)
+        target.unlink(missing_ok=True)
+        try:
+            odt_result = subprocess.run(
+                [sys.executable, str(pyhwp_converter), str(source), str(intermediate)],
+                capture_output=True,
+                text=True,
+                timeout=180,
+            )
+            odt_message = normalize(" ".join(filter(None, (odt_result.stdout, odt_result.stderr))))
+            diagnostics.append(
+                f"pyhwp HWP→ODT 변환: 종료코드 {odt_result.returncode}"
+                + (f", {odt_message[:900]}" if odt_message else "")
+            )
+            if intermediate.exists() and intermediate.stat().st_size > 0:
+                run([
+                    "--convert-to", "pdf:writer_pdf_Export", "--outdir", str(output_dir),
+                    str(intermediate),
+                ], "pyhwp ODT→PDF 변환")
+                if valid_target("pyhwp ODT→PDF 변환 결과"):
+                    return target, ""
+        except subprocess.TimeoutExpired:
+            diagnostics.append("pyhwp HWP→ODT 변환: 제한 시간 초과")
+        finally:
+            intermediate.unlink(missing_ok=True)
+
+    # HWPX, or a binary HWP that pyhwp could not read, falls back to the
+    # LibreOffice extension importer.
     target.unlink(missing_ok=True)
     run([
         "--infilter=Hwp2002_File", "--convert-to", "pdf:writer_pdf_Export",

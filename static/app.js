@@ -1,11 +1,17 @@
-let job=null, currentNumber=null;
+let job=null, currentNumber=null, pendingConversion=null, conversionTarget=null;
 const $=s=>document.querySelector(s), $$=s=>[...document.querySelectorAll(s)];
 const colors=['#dbeafe','#a7d8f0','#76b7df','#ffd27a','#f39a63','#d95d5d'];
 function toast(message){const el=$('#toast');el.textContent=message;el.classList.add('show');setTimeout(()=>el.classList.remove('show'),2600)}
 function busy(on,text='처리 중…'){$('#busyText').textContent=text;$('#busy').classList.toggle('hidden',!on)}
 function switchView(id){$$('.view').forEach(v=>v.classList.toggle('active',v.id===id));$$('.bottom-nav button').forEach(b=>b.classList.toggle('active',b.dataset.view===id));if(id==='roadmapView')renderRoadmap()}
 $$('.bottom-nav button').forEach(b=>b.onclick=()=>switchView(b.dataset.view));
-$$('input[type=file]').forEach(input=>input.onchange=()=>input.closest('.dropzone').querySelector('.filename').textContent=input.files[0]?.name||'선택되지 않음');
+function setFilename(input,name=null){input.closest('.dropzone')?.querySelector('.filename')&&(input.closest('.dropzone').querySelector('.filename').textContent=name||input.files[0]?.name||'선택되지 않음')}
+function isHwp(file){return !!file&&/\.(hwp|hwpx)$/i.test(file.name)}
+$$('input[type=file]').forEach(input=>input.onchange=async()=>{
+  setFilename(input);
+  const file=input.files[0];
+  if(file&&isHwp(file))await convertFile(file,input.id==='converterFile'?null:input);
+});
 $$('.dropzone').forEach(zone=>{
   const input=zone.querySelector('input[type=file]');
   ['dragenter','dragover'].forEach(eventName=>zone.addEventListener(eventName,event=>{event.preventDefault();event.stopPropagation();zone.classList.add('dragging')}));
@@ -13,13 +19,59 @@ $$('.dropzone').forEach(zone=>{
   zone.addEventListener('drop',event=>{
     const file=event.dataTransfer.files?.[0];
     if(!file)return;
-    if(!/\.(hwp|hwpx|pdf)$/i.test(file.name)){toast('HWP, HWPX, PDF 파일만 올릴 수 있습니다.');return}
+    const converterOnly=input.id==='converterFile';
+    if(converterOnly&&!isHwp(file)){toast('변환 메뉴에는 HWP 또는 HWPX 파일을 올려 주세요.');return}
+    if(!converterOnly&&!/\.(hwp|hwpx|pdf)$/i.test(file.name)){toast('HWP, HWPX, PDF 파일만 올릴 수 있습니다.');return}
     const transfer=new DataTransfer();transfer.items.add(file);input.files=transfer.files;input.dispatchEvent(new Event('change'));
   });
 });
 $('#settingsBtn').onclick=()=>{$('#apiKey').value=localStorage.getItem('mockReviewGeminiKey')||'';$('#rememberKey').checked=!!$('#apiKey').value;$('#settingsDialog').showModal()};
 $('#saveSettings').onclick=()=>{if($('#rememberKey').checked)localStorage.setItem('mockReviewGeminiKey',$('#apiKey').value);else localStorage.removeItem('mockReviewGeminiKey');toast('설정을 저장했습니다.')};
-$('#uploadForm').onsubmit=async e=>{e.preventDefault();busy(true,'문항을 찾고 미리보기를 만드는 중…');try{const res=await fetch('/api/upload',{method:'POST',body:new FormData(e.target)});const data=await res.json();if(!res.ok)throw new Error(data.detail||'업로드 실패');job=data;currentNumber=job.items[0]?.number;renderReview();switchView('reviewView');toast(`${job.items.length}개 문항을 찾았습니다.`)}catch(err){toast(err.message)}finally{busy(false)}};
+async function convertFile(file,targetInput=null){
+  busy(true,'한글 파일을 PDF로 변환하는 중…');
+  try{
+    const body=new FormData();body.append('document',file);
+    const res=await fetch('/api/convert',{method:'POST',body});
+    const data=await res.json();if(!res.ok)throw new Error(data.detail||'PDF 변환 실패');
+    pendingConversion=data;conversionTarget=targetInput;
+    renderConverterResult(data);
+    $('#conversionSummary').textContent=`${data.source_name} · ${data.page_count}쪽`;
+    $('#convertedPdfPreview').src=`${data.pdf_url}#page=1&view=FitH`;
+    $('#downloadConverted').href=data.download_url;
+    $('#downloadConverted').download=data.download_name;
+    $('#keepConverted').textContent=targetInput?.id==='solutionFile'?'해설 파일만 교체':'파일만 넣어두기';
+    $('#conversionDialog').showModal();
+    toast('PDF 변환을 마쳤습니다.');
+    return data;
+  }catch(err){toast(err.message);return null}finally{busy(false)}
+}
+async function putConvertedFile(targetInput,analyzeNow=false){
+  if(!pendingConversion)return;
+  busy(true,'변환된 PDF를 준비하는 중…');
+  try{
+    const response=await fetch(pendingConversion.pdf_url);if(!response.ok)throw new Error('변환된 PDF를 불러오지 못했습니다.');
+    const blob=await response.blob();
+    const file=new File([blob],pendingConversion.download_name,{type:'application/pdf'});
+    const transfer=new DataTransfer();transfer.items.add(file);targetInput.files=transfer.files;setFilename(targetInput,file.name);
+    $('#conversionDialog').close();switchView('uploadView');
+    if(analyzeNow){
+      if(targetInput.id==='solutionFile'&&!$('#problemFile').files[0]){toast('먼저 문제지 파일을 넣어 주세요.');return}
+      $('#uploadForm').dataset.autoAnalyze='1';
+      setTimeout(()=>$('#uploadForm').requestSubmit(),0);
+    }else toast(`${targetInput.id==='solutionFile'?'해설':'문제지'} 칸에 변환된 PDF를 넣었습니다.`);
+  }catch(err){toast(err.message)}finally{busy(false)}
+}
+function renderConverterResult(data){
+  const result=$('#converterResult');result.classList.remove('empty');
+  result.innerHTML=`<div class="converter-result-head"><div><b>${escapeHtml(data.download_name)}</b><small>${data.page_count}쪽 · 변환 완료</small></div><a class="secondary-link" href="${data.download_url}" download="${escapeHtml(data.download_name)}">PDF 다운로드</a></div><iframe src="${data.pdf_url}#page=1&view=FitH" title="변환 PDF"></iframe><div class="converter-result-actions"><button class="primary compact" data-use="problem">문제지로 분석</button><button class="primary compact secondary" data-use="solution">해설로 사용</button></div>`;
+  result.querySelector('[data-use="problem"]').onclick=()=>{pendingConversion=data;conversionTarget=$('#problemFile');putConvertedFile($('#problemFile'),true)};
+  result.querySelector('[data-use="solution"]').onclick=()=>{pendingConversion=data;conversionTarget=$('#solutionFile');putConvertedFile($('#solutionFile'),false)};
+}
+$('#converterForm').onsubmit=async e=>{e.preventDefault();const file=$('#converterFile').files[0];if(file)await convertFile(file,null)};
+$('#closeConversion').onclick=()=>$('#conversionDialog').close();
+$('#keepConverted').onclick=()=>putConvertedFile(conversionTarget||$('#problemFile'),false);
+$('#analyzeConverted').onclick=()=>putConvertedFile(conversionTarget||$('#problemFile'),true);
+$('#uploadForm').onsubmit=async e=>{e.preventDefault();const autoAnalyze=e.target.dataset.autoAnalyze==='1';delete e.target.dataset.autoAnalyze;const hwpInput=[$('#problemFile'),$('#solutionFile')].find(input=>isHwp(input.files[0]));if(hwpInput){await convertFile(hwpInput.files[0],hwpInput);return}busy(true,'문항을 찾고 미리보기를 만드는 중…');try{const res=await fetch('/api/upload',{method:'POST',body:new FormData(e.target)});const data=await res.json();if(!res.ok)throw new Error(data.detail||'업로드 실패');job=data;currentNumber=job.items[0]?.number;renderReview();switchView('reviewView');toast(`${job.items.length}개 문항을 찾았습니다.`);if(autoAnalyze)await runAnalysis()}catch(err){toast(err.message)}finally{busy(false)}};
 function renderReview(){
   $('#warnings').innerHTML=(job.warnings||[]).map(w=>`<div class="warning">⚠ ${escapeHtml(w)}</div>`).join('');
   $('#questionStrip').innerHTML=job.items.map(item=>`<button data-number="${item.number}" class="${item.number===currentNumber?'active ':''}${item.analysis?'done ':''}${item.analysis_error?'error':''}">${String(item.number).padStart(2,'0')}</button>`).join('');

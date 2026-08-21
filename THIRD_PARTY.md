@@ -14,3 +14,11 @@ LibreOffice `TextFrame` is replaced with the supported boolean
 `BackTransparent` property. `SurroundContour` belongs to graphic objects and
 caused Debian Bookworm's LibreOffice to abort HWP table conversion with
 `UnknownPropertyException`.
+
+## pyhwp
+
+This project installs `pyhwp 0.1b15` to convert binary HWP files to ODT in an
+isolated Python process before LibreOffice produces the PDF.
+
+- Project: https://github.com/mete0r/pyhwp
+- License: GNU Affero General Public License v3 or later
