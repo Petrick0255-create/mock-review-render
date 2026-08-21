@@ -2,10 +2,10 @@
 
 ## Mozilla PDF.js
 
-- Version: 6.2.108
+- Version: 3.11.174 (legacy/classic browser build)
 - License: Apache License 2.0
 - Website: https://mozilla.github.io/pdf.js/
-- Bundled files: `vendor/pdf.mjs`, `vendor/pdf.worker.mjs`,
+- Bundled files: `vendor/pdf.min.js`, `vendor/pdf.worker.min.js`,
   `vendor/cmaps/`, `vendor/standard_fonts/`
 
 PDF.js is used locally in the browser to display PDF files. The source package is

@@ -1,6 +1,6 @@
-import * as pdfjsLib from "./vendor/pdf.mjs";
+const pdfjsLib = globalThis.pdfjsLib;
 
-pdfjsLib.GlobalWorkerOptions.workerSrc = "./vendor/pdf.worker.mjs";
+if (pdfjsLib) pdfjsLib.GlobalWorkerOptions.workerSrc = "./vendor/pdf.worker.min.js";
 
 const $ = (selector) => document.querySelector(selector);
 const $$ = (selector) => [...document.querySelectorAll(selector)];
@@ -70,6 +70,7 @@ class PdfPane {
     this.other = null;
     this.document = null;
     this.objectUrl = null;
+    this.nativeUrl = null;
     this.fingerprint = "";
     this.pageNumber = 1;
     this.currentQuestion = 1;
@@ -92,6 +93,7 @@ class PdfPane {
     this.pdfCanvas = $(`#${side}Pdf`);
     this.inkCanvas = $(`#${side}Ink`);
     this.empty = $(`#${side}Empty`);
+    this.nativeFrame = $(`#${side}Native`);
     this.nameElement = $(`#${side}Name`);
     this.pageInput = $(`#${side}Page`);
     this.totalElement = $(`#${side}Total`);
@@ -116,6 +118,7 @@ class PdfPane {
   get inkKey() { return `${this.fingerprint}:question:${this.currentQuestion}:columns-${this.layoutColumns}`; }
 
   async load(file) {
+    if (!pdfjsLib) throw new Error("이 Safari에서 PDF 분석 모듈을 시작하지 못했습니다.");
     if (!file || (!file.name.toLowerCase().endsWith(".pdf") && file.type !== "application/pdf")) {
       throw new Error("PDF 파일만 열 수 있습니다.");
     }
@@ -145,9 +148,22 @@ class PdfPane {
     this.totalElement.textContent = String(this.pageCount);
     this.pageInput.max = String(this.pageCount);
     this.empty.classList.add("hidden");
+    this.nativeFrame.classList.add("hidden");
     this.stage.classList.remove("hidden");
     await this.scanQuestions();
     await this.renderQuestion(currentQuestion);
+  }
+
+  showNative(file) {
+    if (this.nativeUrl) URL.revokeObjectURL(this.nativeUrl);
+    this.nativeUrl = URL.createObjectURL(file);
+    this.stage.classList.add("hidden");
+    this.empty.classList.add("hidden");
+    this.nativeFrame.src = this.nativeUrl;
+    this.nativeFrame.classList.remove("hidden");
+    this.nameElement.textContent = file.name;
+    this.nameElement.title = file.name;
+    this.totalElement.textContent = "—";
   }
 
   detectQuestionNumber(text) {
@@ -621,6 +637,7 @@ function updatePicked(side, file) {
   $(`#${side}Picked`).textContent = file ? file.name : "탭해서 파일 선택도 가능합니다";
   $(`#${side}Drop`).classList.toggle("has-file", Boolean(file));
   $("#loadPdfs").disabled = !(validPdf(leftFile.files[0]) && validPdf(rightFile.files[0]));
+  $("#compatPdfs").disabled = $("#loadPdfs").disabled;
 }
 
 for (const side of ["left", "right"]) {
@@ -642,6 +659,16 @@ for (const side of ["left", "right"]) {
 }
 
 $("#openFiles").addEventListener("click", () => fileDialog.showModal());
+$("#compatPdfs").addEventListener("click", () => {
+  const problem = leftFile.files[0];
+  const solution = rightFile.files[0];
+  if (!validPdf(problem) || !validPdf(solution)) return;
+  leftPane.showNative(problem);
+  rightPane.showNative(solution);
+  fileDialog.close();
+  $("#detectStatus").textContent = "Safari 호환 보기 · 문항 인식과 필기는 사용하지 않음";
+  toast("Safari 내장 PDF 표시기로 열었습니다.");
+});
 $("#loadPdfs").addEventListener("click", async () => {
   const problem = leftFile.files[0];
   const solution = rightFile.files[0];
@@ -656,7 +683,11 @@ $("#loadPdfs").addEventListener("click", async () => {
     toast("01~25번 위치를 찾았습니다. 좌상단 버튼으로 문항을 이동할 수 있습니다.");
   } catch (error) {
     console.error(error);
-    toast(`PDF를 열지 못했습니다: ${error.message || "파일을 확인해 주세요."}`);
+    leftPane.showNative(problem);
+    rightPane.showNative(solution);
+    fileDialog.close();
+    $("#detectStatus").textContent = "문항 인식 실패 · Safari 호환 보기로 자동 전환됨";
+    toast("문항 인식 모드가 실패해 Safari 내장 PDF 표시기로 열었습니다.");
   } finally {
     $("#busy").classList.add("hidden");
   }

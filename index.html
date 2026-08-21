@@ -8,7 +8,7 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="PDF 비교">
     <link rel="manifest" href="./manifest.webmanifest">
-    <link rel="stylesheet" href="./style.css?v=15">
+    <link rel="stylesheet" href="./style.css?v=16">
     <title>PDF NOTE COMPARE</title>
   </head>
   <body>
@@ -78,6 +78,7 @@
               <canvas id="leftPdf" class="pdf-canvas"></canvas>
               <canvas id="leftInk" class="ink-canvas"></canvas>
             </div>
+            <iframe id="leftNative" class="native-pdf hidden" title="문제 PDF Safari 호환 보기"></iframe>
             <div id="leftEmpty" class="empty-state"><b>문제 PDF</b><span>파일을 열면 여기에 표시됩니다.</span></div>
           </div>
         </section>
@@ -101,6 +102,7 @@
               <canvas id="rightPdf" class="pdf-canvas"></canvas>
               <canvas id="rightInk" class="ink-canvas"></canvas>
             </div>
+            <iframe id="rightNative" class="native-pdf hidden" title="해설 PDF Safari 호환 보기"></iframe>
             <div id="rightEmpty" class="empty-state"><b>해설 PDF</b><span>파일을 열면 여기에 표시됩니다.</span></div>
           </div>
         </section>
@@ -121,12 +123,16 @@
           </label>
         </div>
         <p class="privacy">파일은 서버에 전송되지 않습니다. 이 기기의 브라우저에서만 열립니다.</p>
-        <button id="loadPdfs" class="primary" type="button" disabled>두 PDF 열기</button>
+        <div class="dialog-actions">
+          <button id="loadPdfs" class="primary" type="button" disabled>문항 인식 모드로 열기</button>
+          <button id="compatPdfs" class="secondary" type="button" disabled>Safari 호환 모드로 바로 열기</button>
+        </div>
       </form>
     </dialog>
 
     <div id="busy" class="busy hidden"><span></span><b>PDF 여는 중…</b></div>
     <div id="toast" class="toast" role="status"></div>
-    <script type="module" src="./app.js?v=15"></script>
+    <script defer src="./vendor/pdf.min.js?v=16"></script>
+    <script defer src="./app.js?v=16"></script>
   </body>
 </html>
