@@ -7,8 +7,8 @@
     <meta name="apple-mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="default">
     <meta name="apple-mobile-web-app-title" content="PDF 비교">
-    <link rel="manifest" href="/manifest.webmanifest">
-    <link rel="stylesheet" href="/style.css">
+    <link rel="manifest" href="./manifest.webmanifest">
+    <link rel="stylesheet" href="./style.css">
     <title>PDF NOTE COMPARE</title>
   </head>
   <body>
@@ -17,7 +17,6 @@
         <div class="brand"><span class="brand-dot"></span><span>PDF NOTE COMPARE</span></div>
         <div class="top-actions">
           <button id="openFiles" class="control" type="button">PDF 열기</button>
-          <label class="check-control"><input id="syncPages" type="checkbox" checked><span>페이지 같이</span></label>
           <label class="check-control"><input id="syncScroll" type="checkbox" checked><span>스크롤 같이</span></label>
           <div class="zoom-control" aria-label="배율 설정">
             <button id="zoomOut" type="button" aria-label="축소">−</button>
@@ -51,14 +50,27 @@
         <button id="clearInk" class="control danger" type="button">현재 쪽 지우기</button>
       </div>
 
+      <nav class="question-nav" aria-label="문항 이동">
+        <button id="questionPrev" type="button">‹ 이전 문항</button>
+        <button id="questionNext" type="button">다음 문항 ›</button>
+        <div class="question-current">
+          <span>문항</span>
+          <label><input id="questionNumber" type="number" min="1" max="25" value="1"><b>번</b></label>
+          <small id="detectStatus">PDF를 열면 01~25번을 찾습니다</small>
+        </div>
+      </nav>
+
       <main class="viewer-grid">
         <section class="pdf-pane" data-side="left">
           <header class="pane-header">
             <div><span class="pane-label">문제</span><span id="leftName" class="file-name">PDF를 열어 주세요</span></div>
-            <div class="page-control">
-              <button id="leftPrev" type="button" aria-label="이전 페이지">‹</button>
-              <label><input id="leftPage" type="number" min="1" value="1" aria-label="문제 페이지"><span>/ <b id="leftTotal">0</b></span></label>
-              <button id="leftNext" type="button" aria-label="다음 페이지">›</button>
+            <div class="pane-tools">
+              <label class="layout-control">문서 형식 <select id="leftLayout"><option value="auto">자동</option><option value="1">1단</option><option value="2">2단</option></select></label>
+              <div class="page-control">
+              <button id="leftPrev" type="button" aria-label="이전 문항">‹</button>
+              <label><span>원본</span><input id="leftPage" type="number" min="1" value="1" aria-label="문제 원본 페이지" readonly><span>/ <b id="leftTotal">0</b></span></label>
+              <button id="leftNext" type="button" aria-label="다음 문항">›</button>
+              </div>
             </div>
           </header>
           <div id="leftViewport" class="viewport">
@@ -75,10 +87,13 @@
         <section class="pdf-pane" data-side="right">
           <header class="pane-header">
             <div><span class="pane-label solution">해설</span><span id="rightName" class="file-name">PDF를 열어 주세요</span></div>
-            <div class="page-control">
-              <button id="rightPrev" type="button" aria-label="이전 페이지">‹</button>
-              <label><input id="rightPage" type="number" min="1" value="1" aria-label="해설 페이지"><span>/ <b id="rightTotal">0</b></span></label>
-              <button id="rightNext" type="button" aria-label="다음 페이지">›</button>
+            <div class="pane-tools">
+              <label class="layout-control">문서 형식 <select id="rightLayout"><option value="auto">자동</option><option value="1">1단</option><option value="2">2단</option></select></label>
+              <div class="page-control">
+              <button id="rightPrev" type="button" aria-label="이전 문항">‹</button>
+              <label><span>원본</span><input id="rightPage" type="number" min="1" value="1" aria-label="해설 원본 페이지" readonly><span>/ <b id="rightTotal">0</b></span></label>
+              <button id="rightNext" type="button" aria-label="다음 문항">›</button>
+              </div>
             </div>
           </header>
           <div id="rightViewport" class="viewport">
@@ -112,6 +127,6 @@
 
     <div id="busy" class="busy hidden"><span></span><b>PDF 여는 중…</b></div>
     <div id="toast" class="toast" role="status"></div>
-    <script type="module" src="/app.js"></script>
+    <script type="module" src="./app.js"></script>
   </body>
 </html>

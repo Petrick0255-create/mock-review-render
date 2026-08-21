@@ -1,41 +1,43 @@
 # PDF NOTE COMPARE
 
-문제 PDF와 해설 PDF를 아이패드에서 나란히 열어 보고 필기하는 웹앱입니다.
-PDF는 서버에 업로드되지 않고 브라우저에서만 처리됩니다.
+문제 PDF와 해설 PDF를 아이패드에서 나란히 열어 보고 필기하는 순수 정적
+웹앱입니다. PDF는 서버에 업로드되지 않고 브라우저에서만 처리됩니다.
 
 ## 기능
 
 - 문제/해설 PDF 2분할 보기
+- 양쪽 PDF에서 01~25번 시작 위치 자동 탐색
+- 현재 문항부터 다음 문항 직전까지 확대하여 이어 붙이기
+- 1단/2단 문서 자동 판별 및 수동 지정
+- 화면 좌상단 버튼이나 방향키로 이전/다음 문항 이동
 - 페이지, 확대/축소, 스크롤 동기화
 - 펜, 형광펜, 지우개, 실행 취소, 현재 페이지 필기 삭제
 - Apple Pencil과 손가락 필기 지원
 - 필기를 브라우저 IndexedDB에 문서별/페이지별 자동 저장
 - iPad 가로/세로 화면 및 홈 화면 전체화면 모드 대응
 
-## Render 배포
+## 배포
 
-이 저장소를 Render Blueprint로 배포하고 `Deploy Blueprint`를 누르면 됩니다.
-환경 변수나 API 키는 필요하지 않습니다. 기존 서비스가 있다면 이 커밋을
-푸시하는 것만으로 다시 배포됩니다.
+서버와 API 키가 필요하지 않습니다. 저장소 전체를 GitHub에 올린 뒤 다음 중
+하나로 배포하면 됩니다.
 
-## 로컬 실행
+### Cloudflare Pages
+
+- Framework preset: `None`
+- Build command: 비워 둠
+- Build output directory: `/`
+
+### GitHub Pages
+
+저장소 `Settings → Pages`에서 `Deploy from a branch`를 선택하고 배포할
+브랜치의 `/ (root)`를 지정합니다.
+
+### 로컬 확인
+
+`index.html`을 직접 열기보다 간단한 로컬 서버를 사용하는 편이 안전합니다.
 
 ```bash
-python -m venv .venv
-```
-
-Windows:
-
-```bat
-.venv\Scripts\python -m pip install -r requirements.txt
-.venv\Scripts\python -m uvicorn app:app --reload --port 8000
-```
-
-macOS/Linux:
-
-```bash
-.venv/bin/python -m pip install -r requirements.txt
-.venv/bin/python -m uvicorn app:app --reload --port 8000
+python -m http.server 8000
 ```
 
 브라우저에서 `http://127.0.0.1:8000`을 엽니다.
